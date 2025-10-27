@@ -83,4 +83,90 @@ def compute_summary(df):
     SL = pivot_counts.get("SL", pd.Series(0, index=pivot_counts.index))
     denom = TP + SL
     # Eğer denom == 0 ise NaN bırak
-    tp_rate = (TP / denom.replace({0: pd.NA})) *
+    tp_rate = (TP / denom.replace({0: pd.NA})) * 100
+
+    pivot = pivot_counts.reset_index()
+    pivot["TP_Rate(%)"] = tp_rate.values
+    # Toplam tüm exit_reason sütunlarını toplayarak Total_Trades hesapla
+    # (power_band kolonu hariç)
+    pivot["Total_Trades"] = pivot.drop(columns=["power_band"]).sum(axis=1)
+
+    return summary, pivot
+
+def pretty_print(summary, pivot):
+    print("==== POWER BANDS PERFORMANCE ====")
+    if summary.empty:
+        print("(Özet boş - veri yok veya uygun sütunlar eksik.)")
+    else:
+        # summary içindeki sayısal sütunları yuvarlayıp göster
+        num_cols = summary.select_dtypes(include="number").columns.tolist()
+        disp_summary = summary.copy()
+        if num_cols:
+            disp_summary[num_cols] = disp_summary[num_cols].round(3)
+        print(disp_summary.to_string(index=False))
+
+    print("\n==== TP RATE BY POWER ====")
+    if pivot.empty:
+        print("(Pivot boş - veri yok veya uygun sütunlar eksik.)")
+    else:
+        # pivot'taki sayısal sütunlar için formatters oluştur
+        num_cols = pivot.select_dtypes(include="number").columns.tolist()
+        if num_cols:
+            formatters = {col: "{:.3f}".format for col in num_cols}
+            # to_string with formatters güvenli şekilde çalışır
+            print(pivot.to_string(index=False, formatters=formatters))
+        else:
+            print(pivot.to_string(index=False))
+
+def plot_results(df, pivot, out_dir="outputs"):
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    sns.set(style="whitegrid")
+
+    if "TP_Rate(%)" in pivot.columns:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        sns.barplot(data=pivot, x="power_band", y="TP_Rate(%)", palette="viridis", ax=ax)
+        ax.set_title("TP Rate (%) by Power Band")
+        ax.set_ylabel("TP Rate (%)")
+        plt.tight_layout()
+        plt.savefig(Path(out_dir) / "tp_rate_by_power.png", dpi=150)
+        plt.close(fig)
+
+    if "gain_pct" in df.columns and not df["gain_pct"].dropna().empty:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        sns.boxplot(data=df, x="power_band", y="gain_pct", palette="pastel", ax=ax)
+        ax.set_title("Gain % distribution by Power Band")
+        ax.set_ylabel("Gain %")
+        plt.tight_layout()
+        plt.savefig(Path(out_dir) / "gainpct_box_by_power.png", dpi=150)
+        plt.close(fig)
+
+    counts = df.groupby(["power_band", "exit_reason"]).size().unstack(fill_value=0)
+    if not counts.empty:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        sns.heatmap(counts, annot=True, fmt="d", cmap="Blues", ax=ax)
+        ax.set_title("Trade counts (power band x exit reason)")
+        plt.tight_layout()
+        plt.savefig(Path(out_dir) / "counts_heatmap.png", dpi=150)
+        plt.close(fig)
+
+def main():
+    try:
+        raw = load_json_safe(FILE_PATH)
+    except FileNotFoundError as e:
+        print(e)
+        return
+
+    df = prepare_dataframe(raw)
+    summary, pivot = compute_summary(df)
+    pretty_print(summary, pivot)
+
+    out_dir = "outputs"
+    Path(out_dir).mkdir(exist_ok=True)
+    summary.to_csv(Path(out_dir) / "summary_by_power_and_exit.csv", index=False)
+    pivot.to_csv(Path(out_dir) / "pivot_tp_rate_by_power.csv", index=False)
+
+    plot_results(df, pivot, out_dir=out_dir)
+    print(f"\nÖzet ve grafikler '{out_dir}' dizinine kaydedildi.")
+
+if __name__ == "__main__":
+    main()
