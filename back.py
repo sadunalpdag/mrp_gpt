@@ -19,11 +19,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Import strategy functions from ema.py
-script_dir = os.path.dirname(os.path.abspath(__file__))
-if script_dir not in sys.path:
-    sys.path.insert(0, script_dir)
-import ema
+# Strategy functions will be implemented directly here
 
 BINANCE_FAPI = "https://fapi.binance.com"
 RESULTS_FILE = "backtest_results_new_strategies.json"
@@ -31,6 +27,171 @@ TRADES_FILE = "backtest_trades_new_strategies.json"
 
 # Configuration
 RATE_LIMIT_DELAY = 0.1  # Delay between API calls to avoid rate limiting
+
+# ===================== TRADING STRATEGY FUNCTIONS =====================
+
+def build_lo_orb_signal(symbol, klines, bar_index):
+    """
+    London Open Range Breakout strategy
+    """
+    # Basit örnek implementasyon - geliştirilebilir
+    if len(klines) < 50:
+        return None
+    
+    closes = [float(k[4]) for k in klines]
+    highs = [float(k[2]) for k in klines]
+    lows = [float(k[3]) for k in klines]
+    
+    # Son 24 barın range'ini al (London session)
+    recent_high = max(highs[-24:])
+    recent_low = min(lows[-24:])
+    current_price = closes[-1]
+    
+    # Range breakout kontrolü
+    if current_price > recent_high * 1.001:  # %0.1 breakout threshold
+        return {
+            "symbol": symbol,
+            "dir": "UP",
+            "entry": current_price,
+            "tp": current_price * 1.008,  # %0.8 TP
+            "sl": current_price * 0.996,  # %0.4 SL
+            "power": 65,
+            "kind": "LO_ORB",
+            "rsi": 60
+        }
+    elif current_price < recent_low * 0.999:  # %0.1 breakout threshold
+        return {
+            "symbol": symbol,
+            "dir": "DOWN",
+            "entry": current_price,
+            "tp": current_price * 0.992,  # %0.8 TP
+            "sl": current_price * 1.004,  # %0.4 SL
+            "power": 65,
+            "kind": "LO_ORB",
+            "rsi": 40
+        }
+    
+    return None
+
+def build_ny_reversal_signal(symbol, klines, bar_index):
+    """
+    New York Reversal strategy
+    """
+    if len(klines) < 50:
+        return None
+    
+    closes = [float(k[4]) for k in klines]
+    highs = [float(k[2]) for k in klines]
+    lows = [float(k[3]) for k in klines]
+    
+    # Basit trend reversal logic
+    # Son 10 barın momentumuna bak
+    momentum = (closes[-1] - closes[-10]) / closes[-10] * 100
+    
+    # RSI benzeri oscillator hesapla
+    gains = []
+    losses = []
+    for i in range(-14, 0):
+        if i == -14:
+            continue
+        change = closes[i] - closes[i-1]
+        if change > 0:
+            gains.append(change)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(change))
+    
+    avg_gain = sum(gains) / 14
+    avg_loss = sum(losses) / 14
+    rs = avg_gain / (avg_loss if avg_loss > 0 else 0.0001)
+    rsi = 100 - (100 / (1 + rs))
+    
+    current_price = closes[-1]
+    
+    # Reversal koşulları
+    if momentum < -2 and rsi < 30:  # Oversold reversal
+        return {
+            "symbol": symbol,
+            "dir": "UP",
+            "entry": current_price,
+            "tp": current_price * 1.01,   # %1 TP
+            "sl": current_price * 0.995,  # %0.5 SL
+            "power": 70,
+            "kind": "NYR",
+            "rsi": rsi
+        }
+    elif momentum > 2 and rsi > 70:  # Overbought reversal
+        return {
+            "symbol": symbol,
+            "dir": "DOWN",
+            "entry": current_price,
+            "tp": current_price * 0.99,   # %1 TP
+            "sl": current_price * 1.005,  # %0.5 SL
+            "power": 70,
+            "kind": "NYR",
+            "rsi": rsi
+        }
+    
+    return None
+
+def build_ict_power3_signal(symbol, klines, bar_index):
+    """
+    ICT Power of 3 strategy
+    """
+    if len(klines) < 60:
+        return None
+    
+    closes = [float(k[4]) for k in klines]
+    highs = [float(k[2]) for k in klines]
+    lows = [float(k[3]) for k in klines]
+    volumes = [float(k[5]) for k in klines]
+    
+    current_price = closes[-1]
+    
+    # Volume profile analysis
+    avg_volume = sum(volumes[-20:]) / 20
+    current_volume = volumes[-1]
+    
+    # Price action patterns
+    # Son 3 barın pattern analizi
+    bar1_close, bar2_close, bar3_close = closes[-3], closes[-2], closes[-1]
+    bar1_high, bar2_high, bar3_high = highs[-3], highs[-2], highs[-1]
+    bar1_low, bar2_low, bar3_low = lows[-3], lows[-2], lows[-1]
+    
+    # Liquidity grab pattern
+    liquidity_grab_up = (bar3_high > bar2_high > bar1_high and 
+                         bar3_close < bar2_close and
+                         current_volume > avg_volume * 1.2)
+    
+    liquidity_grab_down = (bar3_low < bar2_low < bar1_low and 
+                           bar3_close > bar2_close and
+                           current_volume > avg_volume * 1.2)
+    
+    if liquidity_grab_up:
+        return {
+            "symbol": symbol,
+            "dir": "DOWN",
+            "entry": current_price,
+            "tp": current_price * 0.994,  # %0.6 TP
+            "sl": current_price * 1.003,  # %0.3 SL
+            "power": 75,
+            "kind": "ICT_P3",
+            "rsi": 55
+        }
+    elif liquidity_grab_down:
+        return {
+            "symbol": symbol,
+            "dir": "UP",
+            "entry": current_price,
+            "tp": current_price * 1.006,  # %0.6 TP
+            "sl": current_price * 0.997,  # %0.3 SL
+            "power": 75,
+            "kind": "ICT_P3",
+            "rsi": 45
+        }
+    
+    return None
 
 def log(msg):
     """Print and log messages"""
@@ -338,9 +499,9 @@ def main():
     
     # Define strategies to test
     strategies_to_test = {
-        "LO_ORB": ema.build_lo_orb_signal,
-        "NYR": ema.build_ny_reversal_signal,
-        "ICT_P3": ema.build_ict_power3_signal
+        "LO_ORB": build_lo_orb_signal,
+        "NYR": build_ny_reversal_signal,
+        "ICT_P3": build_ict_power3_signal
     }
     
     log(f"\nStrategies to test: {', '.join(strategies_to_test.keys())}")
