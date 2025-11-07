@@ -33,7 +33,7 @@ RATE_LIMIT_DELAY = 0.1  # Delay between API calls to avoid rate limiting
 def build_lo_orb_signal(symbol, klines, bar_index):
     """
     London Open Range Breakout (LO_ORB) Strategy
-    Identifies breakouts during London session (8:00-9:00 UTC)
+    Identifies breakouts during London session (8:00-10:00 UTC)
     """
     if len(klines) < 10:
         return None
@@ -106,7 +106,7 @@ def build_lo_orb_signal(symbol, klines, bar_index):
 def build_ny_reversal_signal(symbol, klines, bar_index):
     """
     New York Reversal (NYR) Strategy
-    Identifies reversals during NY session (13:00-15:00 UTC)
+    Identifies reversals during NY session (13:00-16:00 UTC)
     """
     if len(klines) < 20:
         return None
