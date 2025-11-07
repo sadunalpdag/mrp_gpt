@@ -2,7 +2,7 @@
 """
 Backtest for New Trading Strategies (LO_ORB, NYR, ICT_P3)
 Tests all futures coins with 3 months of historical data
-Does NOT modify ema.py
+Strategies implemented directly in this file
 
 Usage:
   python3 backtest_new_strategies.py                    # Full backtest (all symbols, 3 months)
@@ -19,11 +19,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Import strategy functions from ema.py
-script_dir = os.path.dirname(os.path.abspath(__file__))
-if script_dir not in sys.path:
-    sys.path.insert(0, script_dir)
-import ema
+# Strategy functions implemented directly (no ema.py import needed)
 
 BINANCE_FAPI = "https://fapi.binance.com"
 RESULTS_FILE = "backtest_results_new_strategies.json"
@@ -31,6 +27,238 @@ TRADES_FILE = "backtest_trades_new_strategies.json"
 
 # Configuration
 RATE_LIMIT_DELAY = 0.1  # Delay between API calls to avoid rate limiting
+
+# ===================== STRATEGY FUNCTIONS =====================
+
+def build_lo_orb_signal(symbol, klines, bar_index):
+    """
+    London Open Range Breakout (LO_ORB) Strategy
+    Identifies breakouts during London session (8:00-10:00 UTC)
+    """
+    if len(klines) < 10:
+        return None
+    
+    try:
+        # Get current candle
+        current = klines[bar_index]
+        timestamp = int(current[0])
+        open_price = float(current[1])
+        high = float(current[2])
+        low = float(current[3])
+        close = float(current[4])
+        
+        # Check if we're in London session (8:00-10:00 UTC)
+        dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+        hour = dt.hour
+        
+        if hour < 8 or hour >= 10:
+            return None
+        
+        # Calculate range from previous candles
+        lookback = min(5, bar_index)
+        if lookback < 2:
+            return None
+        
+        prev_candles = klines[bar_index - lookback:bar_index]
+        prev_highs = [float(k[2]) for k in prev_candles]
+        prev_lows = [float(k[3]) for k in prev_candles]
+        
+        range_high = max(prev_highs)
+        range_low = min(prev_lows)
+        range_mid = (range_high + range_low) / 2
+        
+        # Calculate ATR for TP/SL
+        atr = (range_high - range_low) * 0.5
+        
+        # Detect breakout
+        direction = None
+        if close > range_high and close > open_price:
+            direction = "UP"
+            entry = close
+            tp = entry + (atr * 1.5)
+            sl = range_mid
+        elif close < range_low and close < open_price:
+            direction = "DOWN"
+            entry = close
+            tp = entry - (atr * 1.5)
+            sl = range_mid
+        else:
+            return None
+        
+        # Calculate power/RSI estimates
+        power = 60 + min(40, (abs(close - range_mid) / (atr or 1)) * 10)
+        rsi = 50  # Simplified RSI estimate
+        
+        return {
+            "symbol": symbol,
+            "kind": "LO_ORB",
+            "dir": direction,
+            "entry": entry,
+            "tp": tp,
+            "sl": sl,
+            "power": power,
+            "rsi": rsi
+        }
+    except Exception as e:
+        return None
+
+
+def build_ny_reversal_signal(symbol, klines, bar_index):
+    """
+    New York Reversal (NYR) Strategy
+    Identifies reversals during NY session (13:00-16:00 UTC)
+    """
+    if len(klines) < 20:
+        return None
+    
+    try:
+        # Get current candle
+        current = klines[bar_index]
+        timestamp = int(current[0])
+        open_price = float(current[1])
+        high = float(current[2])
+        low = float(current[3])
+        close = float(current[4])
+        
+        # Check if we're in NY session (13:00-16:00 UTC)
+        dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+        hour = dt.hour
+        
+        if hour < 13 or hour >= 16:
+            return None
+        
+        # Look for reversal pattern
+        lookback = min(10, bar_index - 1)
+        if lookback < 3:
+            return None
+        
+        prev_candles = klines[bar_index - lookback:bar_index]
+        prev_closes = [float(k[4]) for k in prev_candles]
+        prev_highs = [float(k[2]) for k in prev_candles]
+        prev_lows = [float(k[3]) for k in prev_candles]
+        
+        # Calculate trend
+        early_avg = sum(prev_closes[:lookback//2]) / (lookback//2)
+        recent_avg = sum(prev_closes[lookback//2:]) / (lookback - lookback//2)
+        
+        # Calculate volatility
+        price_range = max(prev_highs) - min(prev_lows)
+        atr = price_range / len(prev_candles)
+        
+        direction = None
+        
+        # Bullish reversal: was going down, now reversing up
+        if recent_avg < early_avg and close > recent_avg:
+            direction = "UP"
+            entry = close
+            tp = entry + (atr * 2.0)
+            sl = min(prev_lows[-3:])
+        # Bearish reversal: was going up, now reversing down
+        elif recent_avg > early_avg and close < recent_avg:
+            direction = "DOWN"
+            entry = close
+            tp = entry - (atr * 2.0)
+            sl = max(prev_highs[-3:])
+        else:
+            return None
+        
+        power = 55 + min(45, abs(recent_avg - early_avg) / (atr or 1) * 10)
+        rsi = 50
+        
+        return {
+            "symbol": symbol,
+            "kind": "NYR",
+            "dir": direction,
+            "entry": entry,
+            "tp": tp,
+            "sl": sl,
+            "power": power,
+            "rsi": rsi
+        }
+    except Exception as e:
+        return None
+
+
+def build_ict_power3_signal(symbol, klines, bar_index):
+    """
+    ICT Power 3 (ICT_P3) Strategy
+    Identifies power moves during key times (3:00, 10:00, 15:00 UTC)
+    """
+    if len(klines) < 15:
+        return None
+    
+    try:
+        # Get current candle
+        current = klines[bar_index]
+        timestamp = int(current[0])
+        open_price = float(current[1])
+        high = float(current[2])
+        low = float(current[3])
+        close = float(current[4])
+        
+        # Check if we're in a Power 3 time window
+        dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+        hour = dt.hour
+        
+        # Power hours: 3:00, 10:00, 15:00 UTC (±1 hour)
+        power_hours = [3, 10, 15]
+        in_power_hour = any(abs(hour - ph) <= 1 for ph in power_hours)
+        
+        if not in_power_hour:
+            return None
+        
+        # Analyze momentum
+        lookback = min(7, bar_index)
+        if lookback < 3:
+            return None
+        
+        prev_candles = klines[bar_index - lookback:bar_index]
+        prev_closes = [float(k[4]) for k in prev_candles]
+        prev_highs = [float(k[2]) for k in prev_candles]
+        prev_lows = [float(k[3]) for k in prev_candles]
+        
+        # Calculate momentum
+        start_price = prev_closes[0]
+        momentum = (close - start_price) / start_price if start_price > 0 else 0
+        
+        # Calculate ATR
+        price_range = max(prev_highs) - min(prev_lows)
+        atr = price_range / len(prev_candles)
+        
+        direction = None
+        
+        # Strong upward momentum
+        if momentum > 0.003 and close > open_price:
+            direction = "UP"
+            entry = close
+            tp = entry + (atr * 2.5)
+            sl = entry - (atr * 1.0)
+        # Strong downward momentum
+        elif momentum < -0.003 and close < open_price:
+            direction = "DOWN"
+            entry = close
+            tp = entry - (atr * 2.5)
+            sl = entry + (atr * 1.0)
+        else:
+            return None
+        
+        power = 65 + min(35, abs(momentum) * 1000)
+        rsi = 50
+        
+        return {
+            "symbol": symbol,
+            "kind": "ICT_P3",
+            "dir": direction,
+            "entry": entry,
+            "tp": tp,
+            "sl": sl,
+            "power": power,
+            "rsi": rsi
+        }
+    except Exception as e:
+        return None
+
+# ===================== HELPER FUNCTIONS =====================
 
 def log(msg):
     """Print and log messages"""
@@ -338,9 +566,9 @@ def main():
     
     # Define strategies to test
     strategies_to_test = {
-        "LO_ORB": ema.build_lo_orb_signal,
-        "NYR": ema.build_ny_reversal_signal,
-        "ICT_P3": ema.build_ict_power3_signal
+        "LO_ORB": build_lo_orb_signal,
+        "NYR": build_ny_reversal_signal,
+        "ICT_P3": build_ict_power3_signal
     }
     
     log(f"\nStrategies to test: {', '.join(strategies_to_test.keys())}")
