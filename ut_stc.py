@@ -3,18 +3,20 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 import time
 
-# ==========================
-#  TG CAPITAL BACKTEST
-# ==========================
-exchange = ccxt.binance({'options': {'defaultType': 'future'}})
-NY_TZ = timezone(timedelta(hours=-5))
+# ==========================================================
+#  TG CAPITAL BACKTEST — BINANCE FUTURES (USD-M)
+# ==========================================================
 
+# 🔧 1️⃣ Futures API’yı açıkça seçiyoruz
+exchange = ccxt.binanceusdm()   # ✅ sadece USD-M (USDT bazlı) futures
+
+NY_TZ = timezone(timedelta(hours=-5))
 DAYS = 30
 TIMEFRAME = '30m'
 LIMIT = int((24 * 60 / 30) * DAYS)
 EMA_PERIODS = [5, 9, 13, 21]
 
-# --------------------------
+# ----------------------------------------------------------
 def ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
@@ -24,7 +26,7 @@ def fetch_data(symbol):
     df = pd.DataFrame(data, columns=['time','open','high','low','close','volume'])
     df['time'] = pd.to_datetime(df['time'], unit='ms')
     df['ny_hour'] = df['time'].dt.tz_localize('UTC').dt.tz_convert('America/New_York').dt.hour
-    df = df[(df['ny_hour']>=3) & (df['ny_hour']<=6)]  # London kill zone
+    df = df[(df['ny_hour']>=3) & (df['ny_hour']<=6)]   # London Kill Zone (NY saati)
     return df.reset_index(drop=True)
 
 def detect_doji(df):
@@ -77,15 +79,11 @@ def backtest(df):
 
     return pd.DataFrame(trades), balance
 
-
-# ==========================
-#  FIXED SYMBOL DETECTION
-# ==========================
+# ----------------------------------------------------------
+# 2️⃣ Futures marketlerini yükle (USD-M)
+# ----------------------------------------------------------
 markets = exchange.load_markets()
-symbols = [
-    s for s, info in markets.items()
-    if s.endswith("/USDT") and info.get('info', {}).get('contractType') == 'PERPETUAL'
-]
+symbols = [s for s in markets if s.endswith("USDT")]
 
 print(f"📈 Toplam {len(symbols)} USDT futures sembol bulundu.\n")
 
@@ -115,6 +113,7 @@ for sym in symbols:
         print(f"❌ {sym} hata: {e}")
         continue
 
+# ----------------------------------------------------------
 if results_summary:
     df_sum = pd.DataFrame(results_summary).sort_values('final_balance', ascending=False)
     print("\n📊 EN KÂRLI COINLER (30 gün, SL yok):\n")
