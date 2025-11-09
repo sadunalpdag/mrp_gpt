@@ -171,6 +171,77 @@ def analyze_strategy_time_performance(closed_trades):
         print(f"  - Average duration: {fastest[3]:.2f} minutes ({fastest[3]/60:.2f} hours)")
         print("="*70)
 
+def analyze_power_based_performance(closed_trades):
+    """
+    Option 5: Analyze trades by power ranges with step increments
+    Shows closing speed average and strategy for trades in power ranges (e.g., 65-66)
+    """
+    print("\n" + "="*70)
+    print("OPTION 5: POWER-BASED PERFORMANCE ANALYSIS")
+    print("="*70)
+    
+    # Collect data for power ranges
+    power_strategy_data = defaultdict(lambda: defaultdict(list))
+    
+    for trade in closed_trades:
+        open_time = parse_time(trade.get('open_time'))
+        close_time = parse_time(trade.get('close_time'))
+        strategy = trade.get('strategy', 'UNKNOWN')
+        power = trade.get('power')
+        
+        if open_time and close_time and power is not None:
+            duration = (close_time - open_time).total_seconds() / 60  # in minutes
+            # Round power to nearest integer for grouping
+            power_range = int(power)
+            power_strategy_data[power_range][strategy].append(duration)
+    
+    # Display results by power range in steps
+    print("\nAverage Closing Speed by Power Range and Strategy:")
+    print(f"{'Power Range':<15} {'Strategy':<20} {'Trades':>10} {'Avg Speed (min)':>18} {'Avg Speed (hrs)':>18}")
+    print("-" * 85)
+    
+    all_stats = []
+    # Sort power ranges and display in order
+    for power_range in sorted(power_strategy_data.keys()):
+        # Show power range as "X-X+1" (e.g., "65-66")
+        range_label = f"{power_range}-{power_range+1}"
+        
+        for strategy in sorted(power_strategy_data[power_range].keys()):
+            durations = power_strategy_data[power_range][strategy]
+            avg_duration = sum(durations) / len(durations)
+            all_stats.append((power_range, strategy, len(durations), avg_duration))
+            print(f"{range_label:<15} {strategy:<20} {len(durations):>10} {avg_duration:>18.2f} {avg_duration/60:>18.2f}")
+    
+    # Find fastest power-strategy combination
+    if all_stats:
+        fastest = min(all_stats, key=lambda x: x[3])
+        print("\n" + "="*70)
+        print(f"FASTEST COMBINATION:")
+        print(f"  - Power Range: {fastest[0]}-{fastest[0]+1}")
+        print(f"  - Strategy: {fastest[1]}")
+        print(f"  - Number of trades: {fastest[2]}")
+        print(f"  - Average closing speed: {fastest[3]:.2f} minutes ({fastest[3]/60:.2f} hours)")
+        print("="*70)
+    
+    # Summary statistics by power range (all strategies combined)
+    print("\n" + "="*70)
+    print("SUMMARY BY POWER RANGE (All Strategies):")
+    print("-" * 85)
+    print(f"{'Power Range':<15} {'Total Trades':>15} {'Avg Speed (min)':>18} {'Avg Speed (hrs)':>18}")
+    print("-" * 85)
+    
+    for power_range in sorted(power_strategy_data.keys()):
+        range_label = f"{power_range}-{power_range+1}"
+        all_durations = []
+        for strategy_durations in power_strategy_data[power_range].values():
+            all_durations.extend(strategy_durations)
+        
+        if all_durations:
+            avg_duration = sum(all_durations) / len(all_durations)
+            print(f"{range_label:<15} {len(all_durations):>15} {avg_duration:>18.2f} {avg_duration/60:>18.2f}")
+    
+    print("="*70)
+
 def main():
     """Main function with menu system"""
     print("="*70)
@@ -198,10 +269,11 @@ def main():
         print("2. Which time periods have faster closing trades?")
         print("3. Which strategy closes trades fastest by time period?")
         print("4. Run all analyses")
+        print("5. Power-based analysis (closing speed by power ranges)")
         print("0. Exit")
         print("="*70)
         
-        choice = input("\nEnter your choice (0-4): ").strip()
+        choice = input("\nEnter your choice (0-5): ").strip()
         
         if choice == '1':
             analyze_strategy_effectiveness(opened_trades, closed_trades)
@@ -213,11 +285,14 @@ def main():
             analyze_strategy_effectiveness(opened_trades, closed_trades)
             analyze_time_performance(closed_trades)
             analyze_strategy_time_performance(closed_trades)
+            analyze_power_based_performance(closed_trades)
+        elif choice == '5':
+            analyze_power_based_performance(closed_trades)
         elif choice == '0':
             print("\nExiting... Goodbye!")
             break
         else:
-            print("\nInvalid choice. Please select 0-4.")
+            print("\nInvalid choice. Please select 0-5.")
 
 if __name__ == '__main__':
     main()
