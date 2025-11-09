@@ -1,17 +1,18 @@
 # ============================================================
-# 📘 UT BOT + STC Backtest (15 Günlük, Binance 5m)
+# 📘 UT BOT + STC Backtest (45 Günlük, Binance 5m)
 # ============================================================
 
 import ccxt
 import pandas as pd
 import numpy as np
 import ta
+import time
 from datetime import datetime
 
 # ------------------------------------------------------------
 # Binance verisi çekme (15 gün)
 # ------------------------------------------------------------
-def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=15):
+def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=45):
     exchange = ccxt.binance()
     limit = 1500
     all_data = []
@@ -24,6 +25,7 @@ def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=15):
         df_chunk = pd.DataFrame(ohlcv, columns=["Timestamp","Open","High","Low","Close","Volume"])
         all_data.append(df_chunk)
         since = ohlcv[-1][0] + 1
+        time.sleep(0.2)  # 0.2 saniye bekleme - 1500 mum limiti için
         if len(ohlcv) < limit:
             break
 
@@ -70,7 +72,7 @@ def stc(df, length=80, fast=227):
 # Backtest
 # ------------------------------------------------------------
 def backtest_ut_stc(symbol="BTC/USDT", timeframe="5m"):
-    df = fetch_binance(symbol, timeframe, days=15)
+    df = fetch_binance(symbol, timeframe, days=45)
     df = ut_bot(df, key_value=2, atr_period=1)
     df = ut_bot(df, key_value=2, atr_period=300)
     df = stc(df)
@@ -126,7 +128,7 @@ def backtest_ut_stc(symbol="BTC/USDT", timeframe="5m"):
     total_trades = len(results)
     gross_pnl = results["PnL_%"].sum()
 
-    print(f"\n📊 {symbol} — UT BOT + STC Backtest (5m, 15 Gün)")
+    print(f"\n📊 {symbol} — UT BOT + STC Backtest (5m, 45 Gün)")
     print(f"✅ İşlem Sayısı: {total_trades}")
     print(f"🏆 Kazanma Oranı: {win_rate:.1f}%")
     print(f"💰 Ortalama Kâr/Zarar: {avg_pnl:.2f}%")
