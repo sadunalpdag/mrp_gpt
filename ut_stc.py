@@ -1,143 +1,140 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-1-Minute Fibonacci Gold Zone Scalping Backtest (All Binance Futures USDT pairs)
---------------------------------------------------------------------------
-- Strategy:
-    * Detect break of structure (BoS)
-    * Wait for retracement into Fibonacci 0.5–0.618 zone
-    * Entry in trend direction
-    * Stop = 1.0 level, TP = 1:1.5 R/R
-- Backtests last 30 days of 1m OHLCV data from Binance Futures
-- Outputs per-symbol performance summary (CSV)
+TG Capital - London Kill Zone Strategy Backtest
+-----------------------------------------------
+Binance Futures USDT pairs
+30-min candles, last 30 days
+Strategy:
+ - 3:00–6:30 NY time (08:00–11:30 UTC)
+ - EMA alignment (5>9>13>21), price > EMA200
+ - Fair Value Gap (3-bar)
+ - Doji candle in gap
+ - Next candle closes below Doji high
+ - Entry on Doji close, SL=Doji low, TP=1:20
 """
 
 import ccxt, pandas as pd, numpy as np
 from datetime import datetime, timedelta, timezone
+import pytz
 
 # ---------------- CONFIG ---------------- #
 exchange = ccxt.binance({
     "options": {"defaultType": "future"},
     "enableRateLimit": True
 })
-
 symbols = [
     "BTC/USDT","ETH/USDT","BNB/USDT","SOL/USDT","AVAX/USDT","ADA/USDT",
-    "LINK/USDT","DOT/USDT","XRP/USDT","DOGE/USDT","LTC/USDT","MATIC/USDT",
-    "APT/USDT","INJ/USDT","RNDR/USDT","ARB/USDT","NEAR/USDT","OP/USDT",
-    "SUI/USDT","FIL/USDT"
+    "XRP/USDT","DOGE/USDT","LTC/USDT","DOT/USDT","LINK/USDT",
+    "MATIC/USDT","APT/USDT","ARB/USDT","OP/USDT","NEAR/USDT",
+    "SUI/USDT","INJ/USDT","RNDR/USDT","FIL/USDT"
 ]
-timeframe = "1m"
+timeframe = "30m"
 days = 30
-rr_ratio = 1.5
-since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp()*1000)
+rr_ratio = 20.0
+ny_tz = pytz.timezone("America/New_York")
 
-# ---------------- FUNCTIONS ---------------- #
+# ---------------- HELPERS ---------------- #
+def ema(series, n):
+    return series.ewm(span=n, adjust=False).mean()
+
+def is_doji(row):
+    body = abs(row["close"] - row["open"])
+    range_ = row["high"] - row["low"]
+    return body <= range_ * 0.25
+
 def fetch_data(sym):
     try:
+        since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
         ohlc = exchange.fetch_ohlcv(sym, timeframe, since=since, limit=1500)
         df = pd.DataFrame(ohlc, columns=["ts","open","high","low","close","vol"])
         df["time"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
         df.set_index("time", inplace=True)
-        df.sort_index(inplace=True)
+        df = df.astype(float)
         return df
     except Exception as e:
-        print(f"⚠️ {sym} fetch error: {e}")
+        print(f"⚠️ Fetch error {sym}: {e}")
         return None
 
-def fib_levels(high, low):
-    diff = high - low
-    return {"0.5": low + diff*0.5, "0.618": low + diff*0.618, "1.0": high}
-
-def detect_break(df):
-    highs = df["high"].rolling(10).max().shift(1)
-    lows = df["low"].rolling(10).min().shift(1)
-    bos_up = df["close"] > highs
-    bos_down = df["close"] < lows
-    return bos_up, bos_down
-
+# ---------------- STRATEGY ---------------- #
 def backtest(df):
+    df["ema5"] = ema(df["close"], 5)
+    df["ema9"] = ema(df["close"], 9)
+    df["ema13"] = ema(df["close"], 13)
+    df["ema21"] = ema(df["close"], 21)
+    df["ema200"] = ema(df["close"], 200)
+
+    df["ny_time"] = df.index.tz_convert(ny_tz)
+    mask = (df["ny_time"].dt.hour >= 3) & (df["ny_time"].dt.hour <= 6)
+    df = df.loc[mask]
+
     trades = []
-    bos_up, bos_down = detect_break(df)
-    state = "neutral"
-    anchor_high = anchor_low = None
-    waiting = True
 
-    for i in range(10, len(df)):
-        row = df.iloc[i]
-        c, h, l = row["close"], row["high"], row["low"]
+    for i in range(3, len(df)-1):
+        c = df.iloc[i]
+        prev2 = df.iloc[i-2]
+        prev1 = df.iloc[i-1]
+        nxt = df.iloc[i+1]
 
-        if state == "neutral":
-            if bos_up.iloc[i]:
-                state = "uptrend"
-                anchor_low = df["low"].iloc[i-5:i].min()
-                anchor_high = df["high"].iloc[i]
-                fib = fib_levels(anchor_high, anchor_low)
-                waiting = True
-            elif bos_down.iloc[i]:
-                state = "downtrend"
-                anchor_high = df["high"].iloc[i-5:i].max()
-                anchor_low = df["low"].iloc[i]
-                fib = fib_levels(anchor_high, anchor_low)
-                waiting = True
+        # Trend alignment
+        if not (c["ema5"] > c["ema9"] > c["ema13"] > c["ema21"] and c["close"] > c["ema200"]):
             continue
 
-        if state == "uptrend":
-            if waiting and fib["0.5"] <= l <= fib["0.618"]:
-                entry = c
-                stop = fib["1.0"]
-                target = entry + (entry - stop)*rr_ratio
-                waiting = False
-                pos = "long"
-            elif not waiting:
-                if l <= stop:
-                    trades.append(("LONG", entry, stop, stop-entry))
-                    waiting = True; state = "neutral"
-                elif h >= target:
-                    trades.append(("LONG", entry, target, target-entry))
-                    waiting = True; state = "neutral"
+        # Fair Value Gap (bullish)
+        if c["low"] > prev2["high"]:
+            # Doji check (Trident)
+            if is_doji(prev1):
+                # Validation: next candle closes below doji high
+                if nxt["close"] < prev1["high"]:
+                    entry = prev1["close"]
+                    stop = prev1["low"]
+                    target = entry + (entry - stop) * rr_ratio
+                    trades.append((df.index[i], entry, stop, target))
 
-        if state == "downtrend":
-            if waiting and fib["0.5"] >= h >= fib["0.618"]:
-                entry = c
-                stop = fib["1.0"]
-                target = entry - (stop - entry)*rr_ratio
-                waiting = False
-                pos = "short"
-            elif not waiting:
-                if h >= stop:
-                    trades.append(("SHORT", entry, stop, entry-stop))
-                    waiting = True; state = "neutral"
-                elif l <= target:
-                    trades.append(("SHORT", entry, target, entry-target))
-                    waiting = True; state = "neutral"
-    return trades
+    results = []
+    for t in trades:
+        ts, entry, stop, target = t
+        after = df.loc[df.index > ts]
+        hit_tp = hit_sl = None
+        for j, r in after.iterrows():
+            if r["low"] <= stop:
+                hit_sl = j
+                break
+            if r["high"] >= target:
+                hit_tp = j
+                break
+        if hit_tp:
+            pnl = target - entry
+        elif hit_sl:
+            pnl = stop - entry
+        else:
+            pnl = 0
+        results.append(pnl / entry * 100)
+    return results
 
 # ---------------- MAIN LOOP ---------------- #
-results = []
+summary = []
 for sym in symbols:
-    print(f"\n📊 Backtesting {sym}...")
+    print(f"\n📊 Testing {sym} ...")
     df = fetch_data(sym)
     if df is None or df.empty:
         continue
-    trades = backtest(df)
-    if not trades:
-        results.append([sym, 0, 0, 0, 0])
+    pnl_list = backtest(df)
+    if not pnl_list:
+        summary.append([sym,0,0,0])
         continue
-    df_t = pd.DataFrame(trades, columns=["Side","Entry","Exit","PnL"])
-    df_t["PnL_%"] = df_t["PnL"]/df_t["Entry"]*100
-    total = len(df_t)
-    win = (df_t["PnL_%"]>0).sum()
-    winrate = round(win/total*100,2)
-    avgpnl = round(df_t["PnL_%"].mean(),3)
-    totalpnl = round(df_t["PnL_%"].sum(),3)
-    results.append([sym,total,winrate,avgpnl,totalpnl])
-    print(f"✅ {sym}: {total} trades | Win% {winrate} | Avg {avgpnl}% | Total {totalpnl}%")
+    pnl_arr = np.array(pnl_list)
+    total = len(pnl_arr)
+    winrate = np.sum(pnl_arr > 0) / total * 100
+    avgpnl = pnl_arr.mean()
+    totalpnl = pnl_arr.sum()
+    summary.append([sym,total,round(winrate,2),round(avgpnl,3),round(totalpnl,3)])
+    print(f"✅ {sym}: {total} trades | Win% {winrate:.2f} | Avg {avgpnl:.3f}% | Total {totalpnl:.3f}%")
 
-# ---------------- RESULTS ---------------- #
-df_res = pd.DataFrame(results, columns=["Symbol","Trades","WinRate%","AvgPnL%","TotalPnL%"])
+# ---------------- SAVE ---------------- #
+df_res = pd.DataFrame(summary, columns=["Symbol","Trades","WinRate%","AvgPnL%","TotalPnL%"])
 df_res.sort_values("TotalPnL%", ascending=False, inplace=True)
-df_res.to_csv("fib_scalp_results.csv", index=False)
+df_res.to_csv("tgcapital_london_results.csv", index=False)
 print("\n===== SUMMARY =====")
 print(df_res)
-print("\nSaved to fib_scalp_results.csv ✅")
+print("\nSaved to tgcapital_london_results.csv ✅")
