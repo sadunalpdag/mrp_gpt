@@ -1,12 +1,15 @@
 # ============================================================
 # 📘 UT BOT + STC Backtest (TÜM Binance Futures USDT Pariteleri)
+#  - 15 günlük 5m veri
+#  - UTC düzeltmesi
+#  - CSV sonuç kaydı
 # ============================================================
 
 import ccxt
 import pandas as pd
 import numpy as np
 import ta
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ------------------------------------------------------------
 # Binance Futures (USDT-M) verisi çekme
@@ -17,7 +20,7 @@ def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=15):
     })
     limit = 1500
     all_data = []
-    since = exchange.parse8601((datetime.now(datetime.UTC) - pd.Timedelta(days=days)).isoformat())
+    since = exchange.parse8601((datetime.now(timezone.utc) - pd.Timedelta(days=days)).isoformat())
 
     while True:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=limit)
