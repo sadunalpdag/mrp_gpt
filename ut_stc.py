@@ -4,19 +4,16 @@ from datetime import datetime, timedelta, timezone
 import time
 
 # ==========================================================
-#  TG CAPITAL BACKTEST — BINANCE FUTURES (USD-M)
+#  TG CAPITAL BACKTEST — NO STOPLOSS / NO EXIT
 # ==========================================================
-
-# 🔧 1️⃣ Futures API’yı açıkça seçiyoruz
-exchange = ccxt.binanceusdm()   # ✅ sadece USD-M (USDT bazlı) futures
-
+exchange = ccxt.binanceusdm()  # ✅ USD-M Futures (USDT bazlı)
 NY_TZ = timezone(timedelta(hours=-5))
+
 DAYS = 30
 TIMEFRAME = '30m'
 LIMIT = int((24 * 60 / 30) * DAYS)
 EMA_PERIODS = [5, 9, 13, 21]
 
-# ----------------------------------------------------------
 def ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
@@ -26,7 +23,7 @@ def fetch_data(symbol):
     df = pd.DataFrame(data, columns=['time','open','high','low','close','volume'])
     df['time'] = pd.to_datetime(df['time'], unit='ms')
     df['ny_hour'] = df['time'].dt.tz_localize('UTC').dt.tz_convert('America/New_York').dt.hour
-    df = df[(df['ny_hour']>=3) & (df['ny_hour']<=6)]   # London Kill Zone (NY saati)
+    df = df[(df['ny_hour']>=3) & (df['ny_hour']<=6)]
     return df.reset_index(drop=True)
 
 def detect_doji(df):
@@ -37,15 +34,15 @@ def detect_doji(df):
 
 def backtest(df):
     if df.empty or len(df) < 30:
-        return pd.DataFrame(), 1000
+        return None
 
     df = detect_doji(df)
     for p in EMA_PERIODS:
         df[f'ema{p}'] = ema(df['close'], p)
 
-    balance = 1000
     entry = None
-    trades = []
+    entry_time = None
+    entry_price = None
 
     for i in range(25, len(df)):
         row = df.iloc[i]
@@ -60,52 +57,40 @@ def backtest(df):
         doji_signal = prev3['doji'].any()
 
         if entry is None and ema_ok and ema_recent and doji_signal:
-            entry = row['close']
+            entry_price = row['close']
             entry_time = row['time']
-            continue
+            break  # sadece ilk sinyal alınır
 
-        if entry is not None and not ema_ok:
-            exit_price = row['close']
-            pnl = (exit_price - entry) / entry * 100
-            balance *= (1 + pnl/100)
-            trades.append({
-                'entry_time': entry_time,
-                'exit_time': row['time'],
-                'entry': round(entry, 4),
-                'exit': round(exit_price, 4),
-                'pnl_%': round(pnl, 3)
-            })
-            entry = None
+    if entry_price is not None:
+        final_price = df.iloc[-1]['close']
+        pnl = (final_price - entry_price) / entry_price * 100
+        return {
+            'entry_time': entry_time,
+            'entry_price': round(entry_price, 4),
+            'exit_time': df.iloc[-1]['time'],
+            'exit_price': round(final_price, 4),
+            'pnl_%': round(pnl, 3)
+        }
+    else:
+        return None
 
-    return pd.DataFrame(trades), balance
-
-# ----------------------------------------------------------
-# 2️⃣ Futures marketlerini yükle (USD-M)
 # ----------------------------------------------------------
 markets = exchange.load_markets()
 symbols = [s for s in markets if s.endswith("USDT")]
 
 print(f"📈 Toplam {len(symbols)} USDT futures sembol bulundu.\n")
 
-results_summary = []
+results = []
 
 for sym in symbols:
     try:
         print(f"🔹 {sym} verisi alınıyor...")
         df = fetch_data(sym)
-        if df.empty:
-            print("⚠️ Yetersiz veri (London aralığında mum yok).")
-            continue
-        trades, balance = backtest(df)
-        if not trades.empty:
-            avg_pnl = trades['pnl_%'].mean()
-            print(f"✅ {len(trades)} trade | Ortalama PnL: {avg_pnl:.2f}% | Son bakiye: ${balance:.2f}")
-            results_summary.append({
-                'symbol': sym,
-                'trades': len(trades),
-                'avg_pnl': round(avg_pnl, 2),
-                'final_balance': round(balance, 2)
-            })
+        result = backtest(df)
+        if result:
+            print(f"✅ {sym} | PnL: {result['pnl_%']}%")
+            result['symbol'] = sym
+            results.append(result)
         else:
             print("⚠️ Sinyal bulunamadı.")
         time.sleep(0.5)
@@ -113,10 +98,9 @@ for sym in symbols:
         print(f"❌ {sym} hata: {e}")
         continue
 
-# ----------------------------------------------------------
-if results_summary:
-    df_sum = pd.DataFrame(results_summary).sort_values('final_balance', ascending=False)
-    print("\n📊 EN KÂRLI COINLER (30 gün, SL yok):\n")
-    print(df_sum.head(10))
+if results:
+    df_results = pd.DataFrame(results).sort_values('pnl_%', ascending=False)
+    print("\n📊 EN KÂRLI 10 COIN (30 gün, NO STOPLOSS):\n")
+    print(df_results[['symbol','pnl_%','entry_time','exit_time']].head(10))
 else:
-    print("\n❌ Hiç trade oluşmadı.")
+    print("\n❌ Hiç sinyal veya trade oluşmadı.")
