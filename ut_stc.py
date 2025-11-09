@@ -1,5 +1,5 @@
 # ============================================================
-# 📘 UT BOT + STC Backtest (15 Günlük, Binance 5m)
+# 📘 UT BOT + STC Backtest (TÜM Binance Futures USDT Pariteleri)
 # ============================================================
 
 import ccxt
@@ -9,13 +9,15 @@ import ta
 from datetime import datetime
 
 # ------------------------------------------------------------
-# Binance verisi çekme (15 gün)
+# Binance Futures (USDT-M) verisi çekme
 # ------------------------------------------------------------
 def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=15):
-    exchange = ccxt.binance()
+    exchange = ccxt.binance({
+        "options": {"defaultType": "future"}  # ✅ Futures verisi
+    })
     limit = 1500
     all_data = []
-    since = exchange.parse8601((datetime.utcnow() - pd.Timedelta(days=days)).isoformat())
+    since = exchange.parse8601((datetime.now(datetime.UTC) - pd.Timedelta(days=days)).isoformat())
 
     while True:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=limit)
@@ -27,6 +29,8 @@ def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=15):
         if len(ohlcv) < limit:
             break
 
+    if not all_data:
+        return pd.DataFrame()
     df = pd.concat(all_data)
     df["Date"] = pd.to_datetime(df["Timestamp"], unit="ms")
     df.set_index("Date", inplace=True)
@@ -35,14 +39,12 @@ def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=15):
 # ------------------------------------------------------------
 # UT Bot
 # ------------------------------------------------------------
-def ut_bot(df, key_value=2, atr_period=1):
+def ut_bot(df, key_value=2, atr_period=3):
     df = df.copy()
     atr = ta.volatility.AverageTrueRange(df["High"], df["Low"], df["Close"], atr_period).average_true_range()
     df["upperband"] = df["Close"] - (atr * key_value)
     df["lowerband"] = df["Close"] + (atr * key_value)
-
-    buy, sell = [], []
-    trend = 1
+    buy, sell, trend = [], [], 1
     for i in range(len(df)):
         if df["Close"].iloc[i] > df["lowerband"].iloc[i]:
             signal = 1
@@ -58,84 +60,99 @@ def ut_bot(df, key_value=2, atr_period=1):
     return df
 
 # ------------------------------------------------------------
-# STC (Momentum filtre)
+# STC Oscillator
 # ------------------------------------------------------------
-def stc(df, length=80, fast=227):
+def stc(df, length=40, fast=120):
     macd = ta.trend.MACD(df["Close"], window_slow=length, window_fast=int(length/2))
     stc_line = macd.macd_diff()
     df["STC"] = ta.trend.ema_indicator(stc_line, window=int(fast/50))
     return df
 
 # ------------------------------------------------------------
-# Backtest
+# Tek coin backtest
 # ------------------------------------------------------------
-def backtest_ut_stc(symbol="BTC/USDT", timeframe="5m"):
-    df = fetch_binance(symbol, timeframe, days=15)
-    df = ut_bot(df, key_value=2, atr_period=1)
-    df = ut_bot(df, key_value=2, atr_period=300)
+def run_backtest(symbol, timeframe="5m", days=15):
+    df = fetch_binance(symbol, timeframe, days)
+    if df.empty or len(df) < 100:
+        return None
+
+    df = ut_bot(df, key_value=2, atr_period=3)
+    df = ut_bot(df, key_value=2, atr_period=100)
     df = stc(df)
 
     df["buy_signal"] = df["UT_Buy"] & (df["STC"] > 0)
     df["sell_signal"] = df["UT_Sell"] & (df["STC"] < 0)
 
-    position = None
-    trades = []
+    position, trades = None, []
 
     for i in range(1, len(df)):
         price = df["Close"].iloc[i]
         if position is None:
             if df["buy_signal"].iloc[i]:
-                entry = price
-                sl = df["Low"].iloc[i-1]
+                entry, sl = price, df["Low"].iloc[i-1]
                 tp = entry + 2 * (entry - sl)
-                position = {"side": "long", "entry": entry, "sl": sl, "tp": tp, "entry_time": df.index[i]}
+                position = {"side": "long", "entry": entry, "sl": sl, "tp": tp}
             elif df["sell_signal"].iloc[i]:
-                entry = price
-                sl = df["High"].iloc[i-1]
+                entry, sl = price, df["High"].iloc[i-1]
                 tp = entry - 2 * (sl - entry)
-                position = {"side": "short", "entry": entry, "sl": sl, "tp": tp, "entry_time": df.index[i]}
+                position = {"side": "short", "entry": entry, "sl": sl, "tp": tp}
         else:
             if position["side"] == "long":
-                if price <= position["sl"]:
-                    trades.append({**position, "exit": price, "exit_time": df.index[i], "result": -1})
-                    position = None
-                elif price >= position["tp"]:
-                    trades.append({**position, "exit": price, "exit_time": df.index[i], "result": 2})
+                if price <= position["sl"] or price >= position["tp"]:
+                    pnl = (price - position["entry"]) / position["entry"] * 100
+                    trades.append(pnl)
                     position = None
             elif position["side"] == "short":
-                if price >= position["sl"]:
-                    trades.append({**position, "exit": price, "exit_time": df.index[i], "result": -1})
-                    position = None
-                elif price <= position["tp"]:
-                    trades.append({**position, "exit": price, "exit_time": df.index[i], "result": 2})
+                if price >= position["sl"] or price <= position["tp"]:
+                    pnl = (position["entry"] - price) / position["entry"] * 100
+                    trades.append(pnl)
                     position = None
 
-    results = pd.DataFrame(trades)
-    if results.empty:
-        print("❌ No trades found.")
-        return
+    if not trades:
+        return None
 
-    results["PnL_%"] = np.where(
-        results["side"]=="long",
-        (results["exit"]-results["entry"])/results["entry"]*100,
-        (results["entry"]-results["exit"])/results["entry"]*100
-    )
-
-    win_rate = (results["PnL_%"] > 0).mean()*100
-    avg_pnl = results["PnL_%"].mean()
-    total_trades = len(results)
-    gross_pnl = results["PnL_%"].sum()
-
-    print(f"\n📊 {symbol} — UT BOT + STC Backtest (5m, 15 Gün)")
-    print(f"✅ İşlem Sayısı: {total_trades}")
-    print(f"🏆 Kazanma Oranı: {win_rate:.1f}%")
-    print(f"💰 Ortalama Kâr/Zarar: {avg_pnl:.2f}%")
-    print(f"📈 Toplam Getiri: {gross_pnl:.2f}%\n")
-
-    return results
+    pnl_series = pd.Series(trades)
+    return {
+        "symbol": symbol,
+        "trades": len(trades),
+        "win_rate": (pnl_series > 0).mean() * 100,
+        "avg_pnl": pnl_series.mean(),
+        "total_pnl": pnl_series.sum()
+    }
 
 # ------------------------------------------------------------
-# Çalıştır
+# Ana döngü: Tüm Futures USDT coinleri
+# ------------------------------------------------------------
+def main():
+    exchange = ccxt.binance({
+        "options": {"defaultType": "future"}
+    })
+    markets = exchange.load_markets()
+    usdt_pairs = [m for m in markets if m.endswith("/USDT") and "PERP" not in m]
+
+    results = []
+    print(f"🚀 {len(usdt_pairs)} adet USDT paritesi bulundu, test başlıyor...\n")
+
+    for sym in usdt_pairs:
+        try:
+            r = run_backtest(sym)
+            if r:
+                results.append(r)
+                print(f"✅ {r['symbol']}: {r['trades']} işlem | {r['win_rate']:.1f}% | {r['total_pnl']:.2f}%")
+            else:
+                print(f"⚪ {sym}: veri az veya sinyal yok")
+        except Exception as e:
+            print(f"❌ {sym}: hata -> {e}")
+
+    if results:
+        df = pd.DataFrame(results)
+        df = df.sort_values("total_pnl", ascending=False)
+        df.to_csv("ut_stc_futures_report.csv", index=False)
+        print("\n📁 Sonuçlar kaydedildi: ut_stc_futures_report.csv")
+        print(df.head(10))
+    else:
+        print("Hiç sonuç bulunamadı.")
+
 # ------------------------------------------------------------
 if __name__ == "__main__":
-    backtest_ut_stc("BTC/USDT", "5m")
+    main()
