@@ -4,9 +4,13 @@ Backtest for New Trading Strategies (LO_ORB, NYR, ICT_P3)
 Tests all futures coins with 3 months of historical data
 Does NOT modify ema.py
 
+DATA RETRIEVAL: Default 90 days (3 months) of 1-hour candles (~2,160 bars)
+Can be customized with --days parameter
+
 Usage:
-  python3 backtest_new_strategies.py                    # Full backtest (all symbols, 3 months)
-  python3 backtest_new_strategies.py --quick            # Quick test (top 20 symbols, 1 week)
+  python3 backtest_new_strategies.py                    # Full backtest (all symbols, 90 days)
+  python3 backtest_new_strategies.py --quick            # Quick test (top 20 symbols, 7 days)
+  python3 backtest_new_strategies.py --days 60          # Custom period (60 days)
   python3 backtest_new_strategies.py --symbols BTC ETH  # Specific symbols
 """
 
@@ -220,7 +224,10 @@ def get_all_futures_symbols():
 def get_historical_klines(symbol, interval="1h", days=90):
     """
     Get historical klines for a symbol
-    Fetches N months of 1-hour data
+    Fetches N days of 1-hour data
+    
+    Default: 90 days (3 months) of historical data
+    This provides ~2,160 bars for backtesting strategies
     """
     try:
         end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
