@@ -1,6 +1,6 @@
 # ============================================================
 # 📘 UT BOT + STC Backtest (TÜM Binance Futures USDT Pariteleri)
-#  - 15 günlük 5m veri
+#  - 45 günlük 5m veri
 #  - UTC düzeltmesi
 #  - CSV sonuç kaydı
 # ============================================================
@@ -9,12 +9,13 @@ import ccxt
 import pandas as pd
 import numpy as np
 import ta
+import time
 from datetime import datetime, timezone
 
 # ------------------------------------------------------------
 # Binance Futures (USDT-M) verisi çekme
 # ------------------------------------------------------------
-def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=15):
+def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=45):
     exchange = ccxt.binance({
         "options": {"defaultType": "future"}  # ✅ Futures verisi
     })
@@ -29,6 +30,7 @@ def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=15):
         df_chunk = pd.DataFrame(ohlcv, columns=["Timestamp","Open","High","Low","Close","Volume"])
         all_data.append(df_chunk)
         since = ohlcv[-1][0] + 1
+        time.sleep(0.2)  # 0.2 saniye bekleme - 1500 mum limiti için
         if len(ohlcv) < limit:
             break
 
@@ -74,7 +76,7 @@ def stc(df, length=40, fast=120):
 # ------------------------------------------------------------
 # Tek coin backtest
 # ------------------------------------------------------------
-def run_backtest(symbol, timeframe="5m", days=15):
+def run_backtest(symbol, timeframe="5m", days=45):
     df = fetch_binance(symbol, timeframe, days)
     if df.empty or len(df) < 100:
         return None
