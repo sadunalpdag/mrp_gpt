@@ -125,17 +125,29 @@ def analyze_time_performance(closed_trades):
         print(f"  - Average duration: {fastest_slot[2]:.2f} minutes ({fastest_slot[2]/60:.2f} hours)")
         print("="*70)
 
-def analyze_strategy_time_performance(closed_trades):
+def analyze_strategy_time_performance(opened_trades, closed_trades):
     """
     Option 3: Analyze which strategy closes trades fastest by time period
-    Shows average closure time by strategy and half-hour intervals
+    Shows average closure time, open/closed ratio by strategy and half-hour intervals
     """
     print("\n" + "="*70)
     print("OPTION 3: STRATEGY-TIME PERFORMANCE ANALYSIS")
     print("="*70)
     
     strategy_time_durations = defaultdict(lambda: defaultdict(list))
+    strategy_time_opened = defaultdict(lambda: defaultdict(int))
     
+    # Track opened trades by strategy and time slot
+    for trade in opened_trades:
+        open_time = parse_time(trade.get('time'))
+        strategy = trade.get('kind', 'UNKNOWN')
+        
+        if open_time:
+            time_slot = get_half_hour_slot(open_time)
+            if time_slot:
+                strategy_time_opened[strategy][time_slot] += 1
+    
+    # Track closed trades by strategy and time slot
     for trade in closed_trades:
         open_time = parse_time(trade.get('open_time'))
         close_time = parse_time(trade.get('close_time'))
@@ -151,24 +163,44 @@ def analyze_strategy_time_performance(closed_trades):
     all_stats = []
     for strategy in sorted(strategy_time_durations.keys()):
         print(f"\nStrategy: {strategy}")
-        print(f"{'Time Slot':<20} {'Trades':>10} {'Avg Duration (min)':>20} {'Avg Duration (hrs)':>20}")
-        print("-" * 70)
+        print(f"{'Time Slot':<20} {'Closed/Opened':>15} {'Ratio':>10} {'Avg Duration (min)':>20} {'Avg Duration (hrs)':>20}")
+        print("-" * 90)
         
         for time_slot in sorted(strategy_time_durations[strategy].keys()):
             durations = strategy_time_durations[strategy][time_slot]
+            closed_count = len(durations)
+            opened_count = strategy_time_opened[strategy].get(time_slot, 0)
+            
+            # Calculate close ratio
+            if opened_count > 0:
+                close_ratio = (closed_count / opened_count) * 100
+                ratio_str = f"{closed_count}/{opened_count}"
+            else:
+                close_ratio = 0.0
+                ratio_str = f"{closed_count}/0"
+            
             avg_duration = sum(durations) / len(durations)
-            all_stats.append((strategy, time_slot, len(durations), avg_duration))
-            print(f"{time_slot:<20} {len(durations):>10} {avg_duration:>20.2f} {avg_duration/60:>20.2f}")
+            all_stats.append((strategy, time_slot, closed_count, opened_count, close_ratio, avg_duration))
+            print(f"{time_slot:<20} {ratio_str:>15} {close_ratio:>9.1f}% {avg_duration:>20.2f} {avg_duration/60:>20.2f}")
     
     # Find fastest strategy-time combination
     if all_stats:
-        fastest = min(all_stats, key=lambda x: x[3])
+        fastest = min(all_stats, key=lambda x: x[5])
         print("\n" + "="*70)
         print(f"FASTEST COMBINATION:")
         print(f"  - Strategy: {fastest[0]}")
         print(f"  - Time Slot: {fastest[1]}")
-        print(f"  - Number of trades: {fastest[2]}")
-        print(f"  - Average duration: {fastest[3]:.2f} minutes ({fastest[3]/60:.2f} hours)")
+        print(f"  - Closed/Opened: {fastest[2]}/{fastest[3]} ({fastest[4]:.1f}%)")
+        print(f"  - Average duration: {fastest[5]:.2f} minutes ({fastest[5]/60:.2f} hours)")
+        print("="*70)
+        
+        # Find best close ratio
+        best_ratio = max(all_stats, key=lambda x: x[4])
+        print(f"\nBEST CLOSE RATIO:")
+        print(f"  - Strategy: {best_ratio[0]}")
+        print(f"  - Time Slot: {best_ratio[1]}")
+        print(f"  - Closed/Opened: {best_ratio[2]}/{best_ratio[3]} ({best_ratio[4]:.1f}%)")
+        print(f"  - Average duration: {best_ratio[5]:.2f} minutes ({best_ratio[5]/60:.2f} hours)")
         print("="*70)
 
 def analyze_power_based_performance(closed_trades):
@@ -267,7 +299,7 @@ def main():
         print("="*70)
         print("1. Which strategy works best? (Most effective)")
         print("2. Which time periods have faster closing trades?")
-        print("3. Which strategy closes trades fastest by time period?")
+        print("3. Which strategy closes fastest by time period? (with open/closed ratio)")
         print("4. Run all analyses")
         print("5. Power-based analysis (closing speed by power ranges)")
         print("0. Exit")
@@ -280,11 +312,11 @@ def main():
         elif choice == '2':
             analyze_time_performance(closed_trades)
         elif choice == '3':
-            analyze_strategy_time_performance(closed_trades)
+            analyze_strategy_time_performance(opened_trades, closed_trades)
         elif choice == '4':
             analyze_strategy_effectiveness(opened_trades, closed_trades)
             analyze_time_performance(closed_trades)
-            analyze_strategy_time_performance(closed_trades)
+            analyze_strategy_time_performance(opened_trades, closed_trades)
             analyze_power_based_performance(closed_trades)
         elif choice == '5':
             analyze_power_based_performance(closed_trades)
