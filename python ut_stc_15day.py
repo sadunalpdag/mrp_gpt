@@ -10,6 +10,8 @@ from datetime import datetime
 
 # ------------------------------------------------------------
 # Binance verisi çekme (15 gün)
+# Data retrieval period: 15 days of 5-minute candles (~4,320 bars)
+# This provides sufficient data for UT BOT + STC backtest analysis
 # ------------------------------------------------------------
 def fetch_binance(symbol="BTC/USDT", timeframe="5m", days=15):
     exchange = ccxt.binance()

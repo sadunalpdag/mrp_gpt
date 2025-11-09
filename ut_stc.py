@@ -10,6 +10,8 @@
     * Stop = 1.0 level, TP = 1:1.5 R/R
 - Backtests last 30 days of 1m OHLCV data from Binance Futures
 - Outputs per-symbol performance summary (CSV)
+
+DATA RETRIEVAL: 30 days of 1-minute candles (~43,200 bars)
 """
 
 import ccxt, pandas as pd, numpy as np
@@ -28,6 +30,8 @@ symbols = [
     "SUI/USDT","FIL/USDT"
 ]
 timeframe = "1m"
+# Data retrieval period: 30 days of 1-minute candles (~43,200 bars)
+# This is sufficient for Fibonacci scalping backtest
 days = 30
 rr_ratio = 1.5
 since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp()*1000)

@@ -6,6 +6,10 @@ import numpy as np
 
 # ==============================================================================
 # 📘 EMA ULTRA v15.9.54 — Active Strategies (EARLY removed + 6 New Strategies)
+# 
+# DATA RETRIEVAL: 200 bars of 1-hour candles (~8.3 days of historical data)
+# This provides sufficient data for EMA200 and all technical indicators
+# 
 #  - PEMA ve EARLY tamamen kaldırıldı
 #  - UT/STC devre dışı bırakıldı
 #  - Aktif stratejiler:
@@ -1433,6 +1437,9 @@ def build_fvg_breaker_block_signal(sym, kl, bar_i):
 
 
 def scan_symbol(sym,bar_i):
+    # Data retrieval: 200 bars of 1-hour candles (~8.3 days)
+    # This provides enough historical data for all strategy indicators
+    # including EMA200, SuperTrend, MACD, FVG, and session-based strategies
     kl=futures_get_klines(sym,"1h",200)
     if len(kl)<60: return []
     res=[]
