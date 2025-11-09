@@ -1,156 +1,223 @@
 #!/usr/bin/env python3
 """
-Basit RL eğitim + Optuna hyperparameter tuning örneği
-Not: Bu script örnek amaçlıdır. 'load_data' ve env.step() içindeki ödül/aksiyon mantığını
-kendi 'sim closed' ve veri yapınıza göre uyarlamanız gerekir.
+Trading Strategy Analysis Tool
+Analyzes ai_rl_log.json (opened trades) and real_closed.json (closed trades)
+to provide insights about strategy effectiveness and timing.
 """
-import gym
-import numpy as np
-import pandas as pd
-from gym import spaces
-from stable_baselines3 import PPO, SAC, DQN
-from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold
-import optuna
-import os
-import random
-import torch
+import json
+from datetime import datetime, timedelta
+from collections import defaultdict, Counter
 
-# ---------- Veri yükleme (uyarlayın) ----------
-def load_data(path):
-    # Beklenen: DataFrame içinde timestamp, price, sim_closed, vs. sütunları
-    df = pd.read_csv(path, parse_dates=['timestamp'])
-    return df
+def load_json_data(filepath):
+    """Load JSON data from file"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"Error: {filepath} not found!")
+        return []
+    except json.JSONDecodeError:
+        print(f"Error: {filepath} is not a valid JSON file!")
+        return []
 
-# ---------- Basit Gym ortamı ----------
-class TradeEnv(gym.Env):
+def analyze_strategy_effectiveness(opened_trades, closed_trades):
     """
-    Basit environment:
-    - Observation: window of returns + indicators + position info
-    - Action: discrete TP bins (örnek) veya continuous TP
+    Option 1: Analyze which strategy works best
+    Based on the number of successful trades per strategy
     """
-    metadata = {'render.modes': ['human']}
-    def __init__(self, df, window_size=50, tp_bins=None):
-        super().__init__()
-        self.df = df.reset_index(drop=True)
-        self.window = window_size
-        self.pos = 0  # 0: no position, 1: long
-        self.entry_price = None
-        self.i = self.window
-        # Action space: discrete TP bins + close action -> example
-        if tp_bins is None:
-            self.tp_bins = [0.0025, 0.005, 0.01, 0.02]  # 0.25%, 0.5%, 1%, 2%
-        else:
-            self.tp_bins = tp_bins
-        # actions: 0 = hold, 1 = close, 2.. = set TP bin index (enter+setTP)
-        self.action_space = spaces.Discrete(2 + len(self.tp_bins))
-        # observation: returns window + position + time_in_trade normalized
-        obs_len = self.window + 2
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_len,), dtype=np.float32)
+    print("\n" + "="*70)
+    print("OPTION 1: STRATEGY EFFECTIVENESS ANALYSIS")
+    print("="*70)
+    
+    # Count opened trades by strategy
+    opened_by_strategy = Counter()
+    for trade in opened_trades:
+        strategy = trade.get('kind', 'UNKNOWN')
+        opened_by_strategy[strategy] += 1
+    
+    # Count closed trades by strategy
+    closed_by_strategy = Counter()
+    for trade in closed_trades:
+        strategy = trade.get('strategy', 'UNKNOWN')
+        closed_by_strategy[strategy] += 1
+    
+    # Calculate success rate
+    print("\nStrategy Performance:")
+    print(f"{'Strategy':<30} {'Opened':>10} {'Closed':>10} {'Success Rate':>15}")
+    print("-" * 70)
+    
+    all_strategies = set(opened_by_strategy.keys()) | set(closed_by_strategy.keys())
+    strategy_stats = []
+    
+    for strategy in sorted(all_strategies):
+        opened = opened_by_strategy[strategy]
+        closed = closed_by_strategy[strategy]
+        success_rate = (closed / opened * 100) if opened > 0 else 0
+        strategy_stats.append((strategy, opened, closed, success_rate))
+        print(f"{strategy:<30} {opened:>10} {closed:>10} {success_rate:>14.2f}%")
+    
+    # Find best strategy
+    if strategy_stats:
+        best_strategy = max(strategy_stats, key=lambda x: x[3])
+        print("\n" + "="*70)
+        print(f"BEST STRATEGY: {best_strategy[0]}")
+        print(f"  - Opened: {best_strategy[1]} trades")
+        print(f"  - Closed: {best_strategy[2]} trades")
+        print(f"  - Success Rate: {best_strategy[3]:.2f}%")
+        print("="*70)
 
-    def _get_obs(self):
-        window = self.df['price'].pct_change().fillna(0).values
-        start = self.i - self.window
-        ret_window = window[start:self.i]
-        pos_flag = float(self.pos)
-        time_in_trade = 0.0
-        if self.pos:
-            time_in_trade = (self.i - self.entry_index) / 1000.0
-        obs = np.concatenate([ret_window, [pos_flag, time_in_trade]]).astype(np.float32)
-        return obs
+def parse_time(time_str):
+    """Parse ISO 8601 timestamp"""
+    try:
+        return datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+    except:
+        return None
 
-    def reset(self):
-        self.i = random.randint(self.window, len(self.df)-100)  # random start
-        self.pos = 0
-        self.entry_price = None
-        self.entry_index = None
-        return self._get_obs()
+def get_half_hour_slot(dt):
+    """Get the half-hour time slot (e.g., '14:00-14:30')"""
+    if dt is None:
+        return None
+    hour = dt.hour
+    minute = 0 if dt.minute < 30 else 30
+    end_minute = 30 if minute == 0 else 0
+    end_hour = hour if minute == 0 else (hour + 1) % 24
+    return f"{hour:02d}:{minute:02d}-{end_hour:02d}:{end_minute:02d}"
 
-    def step(self, action):
-        done = False
-        reward = 0.0
-        price = self.df.loc[self.i, 'price']
-        # Action logic:
-        if action == 0:  # hold
-            pass
-        elif action == 1:  # close if position
-            if self.pos:
-                ret = (price - self.entry_price) / self.entry_price
-                reward += ret  # simple realized P&L reward
-                # bonus if closed by TP? Here we don't know -- tailor as needed
-                self.pos = 0
-                self.entry_price = None
-                self.entry_index = None
-        else:
-            tp_idx = action - 2
-            tp = self.tp_bins[tp_idx]
-            # if no position, enter position with TP set
-            if not self.pos:
-                self.pos = 1
-                self.entry_price = price
-                self.entry_index = self.i
-                self.current_tp = tp
-            else:
-                # already in position: optionally adjust TP
-                self.current_tp = tp
+def analyze_time_performance(closed_trades):
+    """
+    Option 2: Analyze which time periods have faster closing trades
+    Shows average closure time by half-hour intervals
+    """
+    print("\n" + "="*70)
+    print("OPTION 2: TIME PERIOD PERFORMANCE ANALYSIS")
+    print("="*70)
+    
+    time_durations = defaultdict(list)
+    
+    for trade in closed_trades:
+        open_time = parse_time(trade.get('open_time'))
+        close_time = parse_time(trade.get('close_time'))
+        
+        if open_time and close_time:
+            duration = (close_time - open_time).total_seconds() / 60  # in minutes
+            time_slot = get_half_hour_slot(open_time)
+            if time_slot:
+                time_durations[time_slot].append(duration)
+    
+    # Calculate averages
+    print("\nAverage Trade Duration by Time Period:")
+    print(f"{'Time Slot':<20} {'Trades':>10} {'Avg Duration (min)':>20} {'Avg Duration (hrs)':>20}")
+    print("-" * 70)
+    
+    time_stats = []
+    for time_slot in sorted(time_durations.keys()):
+        durations = time_durations[time_slot]
+        avg_duration = sum(durations) / len(durations)
+        time_stats.append((time_slot, len(durations), avg_duration))
+        print(f"{time_slot:<20} {len(durations):>10} {avg_duration:>20.2f} {avg_duration/60:>20.2f}")
+    
+    # Find fastest time slot
+    if time_stats:
+        fastest_slot = min(time_stats, key=lambda x: x[2])
+        print("\n" + "="*70)
+        print(f"FASTEST TIME SLOT: {fastest_slot[0]}")
+        print(f"  - Number of trades: {fastest_slot[1]}")
+        print(f"  - Average duration: {fastest_slot[2]:.2f} minutes ({fastest_slot[2]/60:.2f} hours)")
+        print("="*70)
 
-        # simulate price move to next timestep
-        self.i += 1
-        if self.pos:
-            # check TP
-            high = self.df.loc[self.i, 'high'] if 'high' in self.df.columns else self.df.loc[self.i, 'price']
-            if (high - self.entry_price) / self.entry_price >= self.current_tp:
-                # hit TP
-                reward += 1.0 + self.current_tp * 100  # bonus structure (tune)
-                self.pos = 0
-                self.entry_price = None
-                self.entry_index = None
-        if self.i >= len(self.df) - 1:
-            done = True
-            # close open position at end
-            if self.pos:
-                ret = (self.df.loc[self.i, 'price'] - self.entry_price) / self.entry_price
-                reward += ret
-                self.pos = 0
+def analyze_strategy_time_performance(closed_trades):
+    """
+    Option 3: Analyze which strategy closes trades fastest by time period
+    Shows average closure time by strategy and half-hour intervals
+    """
+    print("\n" + "="*70)
+    print("OPTION 3: STRATEGY-TIME PERFORMANCE ANALYSIS")
+    print("="*70)
+    
+    strategy_time_durations = defaultdict(lambda: defaultdict(list))
+    
+    for trade in closed_trades:
+        open_time = parse_time(trade.get('open_time'))
+        close_time = parse_time(trade.get('close_time'))
+        strategy = trade.get('strategy', 'UNKNOWN')
+        
+        if open_time and close_time:
+            duration = (close_time - open_time).total_seconds() / 60  # in minutes
+            time_slot = get_half_hour_slot(open_time)
+            if time_slot:
+                strategy_time_durations[strategy][time_slot].append(duration)
+    
+    # Display results by strategy
+    all_stats = []
+    for strategy in sorted(strategy_time_durations.keys()):
+        print(f"\nStrategy: {strategy}")
+        print(f"{'Time Slot':<20} {'Trades':>10} {'Avg Duration (min)':>20} {'Avg Duration (hrs)':>20}")
+        print("-" * 70)
+        
+        for time_slot in sorted(strategy_time_durations[strategy].keys()):
+            durations = strategy_time_durations[strategy][time_slot]
+            avg_duration = sum(durations) / len(durations)
+            all_stats.append((strategy, time_slot, len(durations), avg_duration))
+            print(f"{time_slot:<20} {len(durations):>10} {avg_duration:>20.2f} {avg_duration/60:>20.2f}")
+    
+    # Find fastest strategy-time combination
+    if all_stats:
+        fastest = min(all_stats, key=lambda x: x[3])
+        print("\n" + "="*70)
+        print(f"FASTEST COMBINATION:")
+        print(f"  - Strategy: {fastest[0]}")
+        print(f"  - Time Slot: {fastest[1]}")
+        print(f"  - Number of trades: {fastest[2]}")
+        print(f"  - Average duration: {fastest[3]:.2f} minutes ({fastest[3]/60:.2f} hours)")
+        print("="*70)
 
-        obs = self._get_obs()
-        info = {}
-        return obs, reward, done, info
-
-# ---------- Optuna objective örneği ----------
-def objective(trial):
-    # hyperparams to tune
-    lr = trial.suggest_loguniform('lr', 1e-5, 1e-3)
-    n_steps = trial.suggest_categorical('n_steps', [512, 1024, 2048])
-    gae_lambda = trial.suggest_uniform('gae_lambda', 0.8, 0.99)
-    ent_coef = trial.suggest_loguniform('ent_coef', 1e-8, 1e-2)
-    # yükle ve env oluştur
-    df = load_data('data.csv')  # uyarlayın
-    env = DummyVecEnv([lambda: TradeEnv(df)])
-    model = PPO('MlpPolicy', env, verbose=0,
-                learning_rate=lr, n_steps=n_steps, gae_lambda=gae_lambda, ent_coef=ent_coef)
-    # kısa eğitim (örnek)
-    model.learn(total_timesteps=50_000)
-    # validation: hesapla toplam ödül
-    obs = env.reset()
-    total_reward = 0.0
-    for _ in range(1000):
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, _ = env.step(action)
-        total_reward += reward.sum()
-        if done:
+def main():
+    """Main function with menu system"""
+    print("="*70)
+    print("TRADING STRATEGY ANALYSIS TOOL")
+    print("="*70)
+    
+    # Load data
+    print("\nLoading data...")
+    opened_trades = load_json_data('ai_rl_log.json')
+    closed_trades = load_json_data('real_closed.json')
+    
+    print(f"Loaded {len(opened_trades)} opened trades")
+    print(f"Loaded {len(closed_trades)} closed trades")
+    
+    if not opened_trades and not closed_trades:
+        print("No data loaded. Exiting...")
+        return
+    
+    # Menu system
+    while True:
+        print("\n" + "="*70)
+        print("SELECT ANALYSIS OPTION:")
+        print("="*70)
+        print("1. Which strategy works best? (Most effective)")
+        print("2. Which time periods have faster closing trades?")
+        print("3. Which strategy closes trades fastest by time period?")
+        print("4. Run all analyses")
+        print("0. Exit")
+        print("="*70)
+        
+        choice = input("\nEnter your choice (0-4): ").strip()
+        
+        if choice == '1':
+            analyze_strategy_effectiveness(opened_trades, closed_trades)
+        elif choice == '2':
+            analyze_time_performance(closed_trades)
+        elif choice == '3':
+            analyze_strategy_time_performance(closed_trades)
+        elif choice == '4':
+            analyze_strategy_effectiveness(opened_trades, closed_trades)
+            analyze_time_performance(closed_trades)
+            analyze_strategy_time_performance(closed_trades)
+        elif choice == '0':
+            print("\nExiting... Goodbye!")
             break
-    # Optuna tries to maximize objective by default
-    return float(total_reward)
-
-def run_optuna(n_trials=30):
-    study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=n_trials)
-    print("Best params:", study.best_params)
-    return study
+        else:
+            print("\nInvalid choice. Please select 0-4.")
 
 if __name__ == '__main__':
-    # örnek: optuna çalıştır
-    study = run_optuna(20)
-    # final training with best params (uyarlayın)
-    # ... yükleme, eğitim, checkpoint, değerlendirme
+    main()
