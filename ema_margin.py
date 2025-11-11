@@ -1777,12 +1777,14 @@ def tier_from_power(p):
 STATE_DEFAULT={
     "bar_index":0, "last_report":0, "auto_trade_active":True,
     "last_api_check":0, "long_blocked":False, "short_blocked":False,
+    "cest_long_blocked":False, "cest_short_blocked":False,
     "tg_update_offset":0,
     "initial_margin_balance":0.0, "last_profit_check_ts":0
 }
 PARAM_DEFAULT={
     "SCALP_TP_PCT":0.006, "SCALP_SL_PCT":0.20, "TRADE_SIZE_USDT":250.0,
     "MAX_BUY":30, "MAX_SELL":30,
+    "MAX_CEST_BUY":15, "MAX_CEST_SELL":15,
     "ANGLE_MIN":0.00002, "FAST_EMA_PERIOD":3, "SLOW_EMA_PERIOD":7,
     "ATR_SPIKE_RATIO":0.03, "SCALP_APPROVE_BARS":0,
     "PROFIT_TARGET_USD":60.0
@@ -1793,13 +1795,21 @@ STATE=safe_load(STATE_FILE,STATE_DEFAULT)
 for k,v in STATE_DEFAULT.items(): STATE.setdefault(k,v)
 
 def update_directional_limits():
-    live={"long":{}, "short":{},"long_count":0,"short_count":0}
+    live={"long":{}, "short":{},"long_count":0,"short_count":0,"cest_long_count":0,"cest_short_count":0}
     try:
         acc=_signed_request("GET","/fapi/v2/positionRisk",{"timestamp":now_ts_ms()})
         for p in acc:
             amt=float(p["positionAmt"]); sym=p["symbol"]
-            if amt>0: live["long"][sym]=amt
-            elif amt<0: live["short"][sym]=abs(amt)
+            if amt>0: 
+                live["long"][sym]=amt
+                # Check if this is a CEST position
+                if sym in REAL_POSITIONS_TRACKER and REAL_POSITIONS_TRACKER[sym].get("kind") == "CEST":
+                    live["cest_long_count"] += 1
+            elif amt<0: 
+                live["short"][sym]=abs(amt)
+                # Check if this is a CEST position
+                if sym in REAL_POSITIONS_TRACKER and REAL_POSITIONS_TRACKER[sym].get("kind") == "CEST":
+                    live["cest_short_count"] += 1
         live["long_count"]=len(live["long"])
         live["short_count"]=len(live["short"])
     except Exception as e:
@@ -1807,6 +1817,8 @@ def update_directional_limits():
 
     STATE["long_blocked"]  = (live["long_count"]  >= PARAM["MAX_BUY"])
     STATE["short_blocked"] = (live["short_count"] >= PARAM["MAX_SELL"])
+    STATE["cest_long_blocked"]  = (live["cest_long_count"]  >= PARAM.get("MAX_CEST_BUY", 15))
+    STATE["cest_short_blocked"] = (live["cest_short_count"] >= PARAM.get("MAX_CEST_SELL", 15))
     STATE["auto_trade_active"] = not (STATE["long_blocked"] and STATE["short_blocked"])
     safe_save(STATE_FILE,STATE)
     return live
@@ -2031,6 +2043,8 @@ def heartbeat_and_status_check(_snapshot):
          f"auto:{'✅' if STATE.get('auto_trade_active',True) else '🟥'} "
          f"long_blocked:{STATE.get('long_blocked')} "
          f"short_blocked:{STATE.get('short_blocked')} "
+         f"cest_long_blocked:{STATE.get('cest_long_blocked')} "
+         f"cest_short_blocked:{STATE.get('cest_short_blocked')} "
          f"sim_open:{len([p for p in SIM_POSITIONS if p.get('status')=='OPEN'])} "
          f"sim_closed:{len(SIM_CLOSED)}")
     tg_send(msg); log(msg)
@@ -2106,7 +2120,8 @@ def _cmd_status():
     tg_send(
         f"📊 /status bar:{STATE.get('bar_index')} "
         f"auto:{'✅' if STATE.get('auto_trade_active',True) else '🟥'} "
-        f"long:{live.get('long_count',0)} short:{live.get('short_count',0)} "
+        f"long:{live.get('long_count',0)}/{PARAM.get('MAX_BUY',30)} short:{live.get('short_count',0)}/{PARAM.get('MAX_SELL',30)} "
+        f"cest_long:{live.get('cest_long_count',0)}/{PARAM.get('MAX_CEST_BUY',15)} cest_short:{live.get('cest_short_count',0)}/{PARAM.get('MAX_CEST_SELL',15)} "
         f"real_closed:{len(REAL_CLOSED)} "
         f"sim_open:{len([p for p in SIM_POSITIONS if p.get('status')=='OPEN'])} "
         f"sim_closed:{len(SIM_CLOSED)}"
@@ -2397,10 +2412,20 @@ def _duplicate_or_locked(sym, direction):
             log(f"[DUP-SHORT] {sym}"); return True
     return False
 
-def _can_direction(direction):
+def _can_direction(direction, kind=""):
     if not STATE.get("auto_trade_active", True): return False
     if direction=="UP" and STATE.get("long_blocked",False):  return False
     if direction=="DOWN" and STATE.get("short_blocked",False): return False
+    
+    # Check CEST-specific limits
+    if kind == "CEST":
+        if direction=="UP" and STATE.get("cest_long_blocked",False):
+            log(f"[CEST LIMIT] CEST long positions blocked (max: {PARAM.get('MAX_CEST_BUY', 15)})")
+            return False
+        if direction=="DOWN" and STATE.get("cest_short_blocked",False):
+            log(f"[CEST LIMIT] CEST short positions blocked (max: {PARAM.get('MAX_CEST_SELL', 15)})")
+            return False
+    
     return True
 
 def execute_real_trade(sig):
@@ -2412,7 +2437,7 @@ def execute_real_trade(sig):
     kind=sig.get("kind","")
 
     # 🔒 Duplicate / Direction limits
-    if not _can_direction(direction): return
+    if not _can_direction(direction, kind): return
     if _duplicate_or_locked(sym,direction): return
 
     qty=calc_order_qty(sym,sig["entry"],PARAM["TRADE_SIZE_USDT"])
