@@ -83,17 +83,28 @@ def get_half_hour_slot(dt):
     end_hour = hour if minute == 0 else (hour + 1) % 24
     return f"{hour:02d}:{minute:02d}-{end_hour:02d}:{end_minute:02d}"
 
-def analyze_time_performance(closed_trades):
+def analyze_time_performance(opened_trades, closed_trades):
     """
     Option 2: Analyze which time periods have faster closing trades
-    Shows average closure time by half-hour intervals
+    Shows average closure time and open/close ratio by half-hour intervals
     """
     print("\n" + "="*70)
     print("OPTION 2: TIME PERIOD PERFORMANCE ANALYSIS")
     print("="*70)
     
     time_durations = defaultdict(list)
+    time_opened = defaultdict(int)
     
+    # Track opened trades by time slot
+    for trade in opened_trades:
+        open_time = parse_time(trade.get('time'))
+        
+        if open_time:
+            time_slot = get_half_hour_slot(open_time)
+            if time_slot:
+                time_opened[time_slot] += 1
+    
+    # Track closed trades by time slot
     for trade in closed_trades:
         open_time = parse_time(trade.get('open_time'))
         close_time = parse_time(trade.get('close_time'))
@@ -105,24 +116,42 @@ def analyze_time_performance(closed_trades):
                 time_durations[time_slot].append(duration)
     
     # Calculate averages
-    print("\nAverage Trade Duration by Time Period:")
-    print(f"{'Time Slot':<20} {'Trades':>10} {'Avg Duration (min)':>20} {'Avg Duration (hrs)':>20}")
-    print("-" * 70)
+    print("\nAverage Trade Duration and Open/Close Ratio by Time Period:")
+    print(f"{'Time Slot':<20} {'Closed/Opened':>15} {'Ratio':>10} {'Avg Duration (min)':>20} {'Avg Duration (hrs)':>20}")
+    print("-" * 90)
     
     time_stats = []
     for time_slot in sorted(time_durations.keys()):
         durations = time_durations[time_slot]
+        closed_count = len(durations)
+        opened_count = time_opened.get(time_slot, 0)
+        
+        # Calculate close ratio
+        if opened_count > 0:
+            close_ratio = (closed_count / opened_count) * 100
+            ratio_str = f"{closed_count}/{opened_count}"
+        else:
+            close_ratio = 0.0
+            ratio_str = f"{closed_count}/0"
+        
         avg_duration = sum(durations) / len(durations)
-        time_stats.append((time_slot, len(durations), avg_duration))
-        print(f"{time_slot:<20} {len(durations):>10} {avg_duration:>20.2f} {avg_duration/60:>20.2f}")
+        time_stats.append((time_slot, closed_count, opened_count, close_ratio, avg_duration))
+        print(f"{time_slot:<20} {ratio_str:>15} {close_ratio:>9.1f}% {avg_duration:>20.2f} {avg_duration/60:>20.2f}")
     
     # Find fastest time slot
     if time_stats:
-        fastest_slot = min(time_stats, key=lambda x: x[2])
+        fastest_slot = min(time_stats, key=lambda x: x[4])
         print("\n" + "="*70)
         print(f"FASTEST TIME SLOT: {fastest_slot[0]}")
-        print(f"  - Number of trades: {fastest_slot[1]}")
-        print(f"  - Average duration: {fastest_slot[2]:.2f} minutes ({fastest_slot[2]/60:.2f} hours)")
+        print(f"  - Closed/Opened: {fastest_slot[1]}/{fastest_slot[2]} ({fastest_slot[3]:.1f}%)")
+        print(f"  - Average duration: {fastest_slot[4]:.2f} minutes ({fastest_slot[4]/60:.2f} hours)")
+        print("="*70)
+        
+        # Find best close ratio
+        best_ratio = max(time_stats, key=lambda x: x[3])
+        print(f"\nBEST CLOSE RATIO TIME SLOT: {best_ratio[0]}")
+        print(f"  - Closed/Opened: {best_ratio[1]}/{best_ratio[2]} ({best_ratio[3]:.1f}%)")
+        print(f"  - Average duration: {best_ratio[4]:.2f} minutes ({best_ratio[4]/60:.2f} hours)")
         print("="*70)
 
 def analyze_strategy_time_performance(opened_trades, closed_trades):
@@ -203,10 +232,10 @@ def analyze_strategy_time_performance(opened_trades, closed_trades):
         print(f"  - Average duration: {best_ratio[5]:.2f} minutes ({best_ratio[5]/60:.2f} hours)")
         print("="*70)
 
-def analyze_power_based_performance(closed_trades):
+def analyze_power_based_performance(opened_trades, closed_trades):
     """
     Option 5: Analyze trades by power ranges with step increments
-    Shows closing speed average and strategy for trades in power ranges (e.g., 65-66)
+    Shows closing speed average, open/close ratio and strategy for trades in power ranges (e.g., 65-66)
     """
     print("\n" + "="*70)
     print("OPTION 5: POWER-BASED PERFORMANCE ANALYSIS")
@@ -214,7 +243,19 @@ def analyze_power_based_performance(closed_trades):
     
     # Collect data for power ranges
     power_strategy_data = defaultdict(lambda: defaultdict(list))
+    power_strategy_opened = defaultdict(lambda: defaultdict(int))
     
+    # Track opened trades by power range and strategy
+    for trade in opened_trades:
+        strategy = trade.get('kind', 'UNKNOWN')
+        power = trade.get('power')
+        
+        if power is not None:
+            # Round power to nearest integer for grouping
+            power_range = int(power)
+            power_strategy_opened[power_range][strategy] += 1
+    
+    # Track closed trades by power range and strategy
     for trade in closed_trades:
         open_time = parse_time(trade.get('open_time'))
         close_time = parse_time(trade.get('close_time'))
@@ -228,9 +269,9 @@ def analyze_power_based_performance(closed_trades):
             power_strategy_data[power_range][strategy].append(duration)
     
     # Display results by power range in steps
-    print("\nAverage Closing Speed by Power Range and Strategy:")
-    print(f"{'Power Range':<15} {'Strategy':<20} {'Trades':>10} {'Avg Speed (min)':>18} {'Avg Speed (hrs)':>18}")
-    print("-" * 85)
+    print("\nAverage Closing Speed and Open/Close Ratio by Power Range and Strategy:")
+    print(f"{'Power Range':<15} {'Strategy':<20} {'Closed/Opened':>15} {'Ratio':>10} {'Avg Speed (min)':>18} {'Avg Speed (hrs)':>18}")
+    print("-" * 110)
     
     all_stats = []
     # Sort power ranges and display in order
@@ -240,37 +281,70 @@ def analyze_power_based_performance(closed_trades):
         
         for strategy in sorted(power_strategy_data[power_range].keys()):
             durations = power_strategy_data[power_range][strategy]
+            closed_count = len(durations)
+            opened_count = power_strategy_opened[power_range].get(strategy, 0)
+            
+            # Calculate close ratio
+            if opened_count > 0:
+                close_ratio = (closed_count / opened_count) * 100
+                ratio_str = f"{closed_count}/{opened_count}"
+            else:
+                close_ratio = 0.0
+                ratio_str = f"{closed_count}/0"
+            
             avg_duration = sum(durations) / len(durations)
-            all_stats.append((power_range, strategy, len(durations), avg_duration))
-            print(f"{range_label:<15} {strategy:<20} {len(durations):>10} {avg_duration:>18.2f} {avg_duration/60:>18.2f}")
+            all_stats.append((power_range, strategy, closed_count, opened_count, close_ratio, avg_duration))
+            print(f"{range_label:<15} {strategy:<20} {ratio_str:>15} {close_ratio:>9.1f}% {avg_duration:>18.2f} {avg_duration/60:>18.2f}")
     
     # Find fastest power-strategy combination
     if all_stats:
-        fastest = min(all_stats, key=lambda x: x[3])
+        fastest = min(all_stats, key=lambda x: x[5])
         print("\n" + "="*70)
         print(f"FASTEST COMBINATION:")
         print(f"  - Power Range: {fastest[0]}-{fastest[0]+1}")
         print(f"  - Strategy: {fastest[1]}")
-        print(f"  - Number of trades: {fastest[2]}")
-        print(f"  - Average closing speed: {fastest[3]:.2f} minutes ({fastest[3]/60:.2f} hours)")
+        print(f"  - Closed/Opened: {fastest[2]}/{fastest[3]} ({fastest[4]:.1f}%)")
+        print(f"  - Average closing speed: {fastest[5]:.2f} minutes ({fastest[5]/60:.2f} hours)")
+        print("="*70)
+        
+        # Find best close ratio
+        best_ratio = max(all_stats, key=lambda x: x[4])
+        print(f"\nBEST CLOSE RATIO:")
+        print(f"  - Power Range: {best_ratio[0]}-{best_ratio[0]+1}")
+        print(f"  - Strategy: {best_ratio[1]}")
+        print(f"  - Closed/Opened: {best_ratio[2]}/{best_ratio[3]} ({best_ratio[4]:.1f}%)")
+        print(f"  - Average closing speed: {best_ratio[5]:.2f} minutes ({best_ratio[5]/60:.2f} hours)")
         print("="*70)
     
     # Summary statistics by power range (all strategies combined)
     print("\n" + "="*70)
     print("SUMMARY BY POWER RANGE (All Strategies):")
-    print("-" * 85)
-    print(f"{'Power Range':<15} {'Total Trades':>15} {'Avg Speed (min)':>18} {'Avg Speed (hrs)':>18}")
-    print("-" * 85)
+    print("-" * 110)
+    print(f"{'Power Range':<15} {'Closed/Opened':>15} {'Ratio':>10} {'Avg Speed (min)':>18} {'Avg Speed (hrs)':>18}")
+    print("-" * 110)
     
     for power_range in sorted(power_strategy_data.keys()):
         range_label = f"{power_range}-{power_range+1}"
         all_durations = []
+        total_closed = 0
+        total_opened = 0
+        
         for strategy_durations in power_strategy_data[power_range].values():
             all_durations.extend(strategy_durations)
+            total_closed += len(strategy_durations)
+        
+        for strategy_opened in power_strategy_opened[power_range].values():
+            total_opened += strategy_opened
         
         if all_durations:
             avg_duration = sum(all_durations) / len(all_durations)
-            print(f"{range_label:<15} {len(all_durations):>15} {avg_duration:>18.2f} {avg_duration/60:>18.2f}")
+            if total_opened > 0:
+                close_ratio = (total_closed / total_opened) * 100
+                ratio_str = f"{total_closed}/{total_opened}"
+            else:
+                close_ratio = 0.0
+                ratio_str = f"{total_closed}/0"
+            print(f"{range_label:<15} {ratio_str:>15} {close_ratio:>9.1f}% {avg_duration:>18.2f} {avg_duration/60:>18.2f}")
     
     print("="*70)
 
@@ -310,16 +384,16 @@ def main():
         if choice == '1':
             analyze_strategy_effectiveness(opened_trades, closed_trades)
         elif choice == '2':
-            analyze_time_performance(closed_trades)
+            analyze_time_performance(opened_trades, closed_trades)
         elif choice == '3':
             analyze_strategy_time_performance(opened_trades, closed_trades)
         elif choice == '4':
             analyze_strategy_effectiveness(opened_trades, closed_trades)
-            analyze_time_performance(closed_trades)
+            analyze_time_performance(opened_trades, closed_trades)
             analyze_strategy_time_performance(opened_trades, closed_trades)
-            analyze_power_based_performance(closed_trades)
+            analyze_power_based_performance(opened_trades, closed_trades)
         elif choice == '5':
-            analyze_power_based_performance(closed_trades)
+            analyze_power_based_performance(opened_trades, closed_trades)
         elif choice == '0':
             print("\nExiting... Goodbye!")
             break
