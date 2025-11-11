@@ -365,3 +365,98 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ========================== USAGE INSTRUCTIONS ==========================
+"""
+UT/STC STRATEGY BACKTEST - KULLANIM KILAVUZU
+
+📖 GENEL BİLGİ:
+Bu script, EMA13 vs EMA50 + Schaff Trend Cycle (STC) stratejisini kullanarak
+Binance USD-M Futures market'inde tüm USDT perpetual kontratları için 
+backtest yapar.
+
+🎯 STRATEJİ DETAYLARI:
+- Timeframe: 1 saat (hourly candles)
+- Backtest Süresi: 90 gün
+- Göstergeler:
+  * EMA13 (13 periyotluk Exponential Moving Average)
+  * EMA50 (50 periyotluk Exponential Moving Average)
+  * STC (Schaff Trend Cycle: fast=23, slow=50, cycle=10)
+  * RSI, ATR (ek bilgi için)
+
+📊 SİNYAL KURALLARI:
+✅ BUY (LONG) Sinyali:
+  - EMA13 > EMA50 (uptrend)
+  - STC bir önceki barda <= 60
+  - STC şu anki barda > 60 (yukarı kesişme)
+
+✅ SELL (SHORT) Sinyali:
+  - EMA13 < EMA50 (downtrend)
+  - STC bir önceki barda >= 40
+  - STC şu anki barda < 40 (aşağı kesişme)
+
+💰 RİSK YÖNETİMİ:
+- Take Profit (TP): %0.6 (conservative)
+- Stop Loss (SL): %20 (geniş SL, trend takibi için)
+- Başlangıç Bakiyesi: $1000 per trade
+
+🚀 NASIL KULLANILIR:
+1. Temel kullanım:
+   $ python ut_stc.py
+
+2. Script otomatik olarak:
+   - Tüm USDT perpetual kontratları listeler
+   - Her biri için 90 günlük 1h veri çeker
+   - UT/STC stratejisini uygular
+   - TP/SL takibi yapar
+   - Sonuçları CSV'ye kaydeder
+
+📁 ÇIKTILAR:
+- Konsol çıktısı: Detaylı istatistikler ve en iyi/kötü işlemler
+- CSV dosyası: "ut_stc_backtest.csv" (tüm işlem detayları)
+
+📈 ÇIKTI İÇERİĞİ:
+Her işlem için:
+- symbol: Coin/kontrat adı
+- direction: UP (long) veya DOWN (short)
+- entry_price, exit_price: Giriş ve çıkış fiyatları
+- entry_time, exit_time: Giriş ve çıkış zamanları
+- exit_reason: TP (kar al), SL (zarar kes), END (veri sonu)
+- tp_price, sl_price: TP ve SL seviyeleri
+- pnl_%: Kar/zarar yüzdesi
+- final_balance_$: İşlem sonrası bakiye
+- power: Sinyal gücü (>65 = güçlü)
+- rsi, atr, ema13, ema50, stc: Gösterge değerleri
+
+📊 İSTATİSTİKLER:
+- Toplam işlem sayısı
+- Kazanan/kaybeden işlem sayısı ve oranı
+- TP/SL/END hit sayıları
+- Ortalama ve toplam PnL
+- UP/DOWN işlem dağılımı
+- En karlı ve zararlı işlemler
+
+⚙️ ÖZELLEŞTIRME:
+Üstteki sabitleri değiştirerek:
+- TIMEFRAME: Zaman dilimi ("1h", "4h", "1d", vb.)
+- DAYS: Backtest süresi
+- START_BALANCE: Başlangıç bakiyesi
+- EMA13_PERIOD, EMA50_PERIOD: EMA periyotları
+- STC_FAST, STC_SLOW, STC_CYCLE: STC parametreleri
+
+💡 NOTLAR:
+1. Script API rate limiting için otomatik olarak bekler
+2. Hata durumunda işlem atlanır ve devam edilir
+3. Gerçek trade değil, sadece backtest (simülasyon)
+4. Sonuçlar geçmiş performans gösterir, gelecek garantisi değildir
+5. ema_margin.py ile tutarlı strateji implementasyonu
+
+🔍 EK BİLGİ:
+- STC (Schaff Trend Cycle): Trend dönüşlerini erken yakalayan oscillator
+- 60 seviyesi üstü = bullish momentum
+- 40 seviyesi altı = bearish momentum
+- EMA crossover ile birleşince güçlü sinyaller üretir
+
+📞 DESTEK:
+Sorular için projenin GitHub sayfasına bakın veya issue açın.
+"""
