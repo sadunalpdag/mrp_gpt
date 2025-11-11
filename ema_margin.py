@@ -20,7 +20,7 @@ import numpy as np
 #       ⚡ ICT POWER OF 3 (Accumulation-Manipulation-Distribution - 08:30-12:00 EST)
 #       🌏 ASIAN RANGE BREAKOUT (ARB - 03:00-08:00 GMT)
 #       🧱 FVG + BREAKER BLOCK (FVG + Breaker Zone - Session Independent)
-#  - Power filtresi kaldırıldı
+#  - Power filtresi kaldırıldı,margin wallet geldi 60 dolarla kar al seceneği eklendi. 
 #  - Smart TP, 6h TrendLock, Guards, Telegram sistemi aynı
 # ==============================================================================
 
@@ -52,13 +52,6 @@ TRENDLOCK_EXPIRY_SEC = 6 * 3600
 SIM_QUEUE = []
 REAL_POSITIONS_TRACKER = {}  # Track open positions with strategy info
 LAST_REAL_CLOSE_CHECK = 0  # Timestamp of last real close check
-
-# ===================== Margin Balance Monitoring =====================
-MARGIN_BALANCE_INITIAL = None  # Initial margin balance when monitoring starts
-MARGIN_BALANCE_TARGET_INCREASE = 100.0  # Target increase in USDT to trigger position closure
-MARGIN_BALANCE_MONITORING_ACTIVE = False  # Flag to track if monitoring is active
-LAST_MARGIN_BALANCE_CHECK = 0  # Timestamp of last balance check
-
 getcontext().prec = 28
 
 # ===================== Kıvanç Confirm Settings =====================
@@ -1766,191 +1759,6 @@ def futures_get_klines(sym,it,lim):
     except:
         return []
 
-# ===================== MARGIN BALANCE MONITORING FUNCTIONS =====================
-
-def get_margin_balance():
-    """
-    Get current margin balance (availableBalance) from Binance Futures account.
-    Returns the margin balance in USDT or None if error.
-    """
-    try:
-        account = _signed_request("GET", "/fapi/v2/account", {"timestamp": now_ts_ms()})
-        # Get availableBalance from account
-        available_balance = float(account.get("availableBalance", 0))
-        return available_balance
-    except Exception as e:
-        log(f"[GET MARGIN BALANCE ERR] {e}")
-        return None
-
-def close_all_positions_at_mark_price():
-    """
-    Close all open positions at mark price by placing market orders.
-    This function:
-    1. Gets all open positions
-    2. For each position, places a closing market order
-    3. Cancels any open TP/SL orders
-    4. Returns number of positions closed
-    """
-    global REAL_POSITIONS_TRACKER
-    
-    try:
-        # Get all open positions
-        positions = _signed_request("GET", "/fapi/v2/positionRisk", {"timestamp": now_ts_ms()})
-        
-        closed_count = 0
-        positions_to_close = []
-        
-        # Identify positions that need to be closed
-        for pos in positions:
-            amt = float(pos["positionAmt"])
-            if amt != 0:  # Position is open
-                sym = pos["symbol"]
-                entry_price = float(pos["entryPrice"])
-                mark_price = float(pos["markPrice"])
-                unrealized_pnl = float(pos["unRealizedProfit"])
-                
-                positions_to_close.append({
-                    "symbol": sym,
-                    "amount": amt,
-                    "entry_price": entry_price,
-                    "mark_price": mark_price,
-                    "unrealized_pnl": unrealized_pnl
-                })
-        
-        if not positions_to_close:
-            log("[CLOSE ALL POSITIONS] No positions to close")
-            return 0
-        
-        log(f"[CLOSE ALL POSITIONS] Closing {len(positions_to_close)} positions at mark price")
-        
-        # Close each position
-        for pos_info in positions_to_close:
-            sym = pos_info["symbol"]
-            amt = pos_info["amount"]
-            
-            try:
-                # Determine side and position side
-                if amt > 0:  # Long position
-                    side = "SELL"
-                    pos_side = "LONG"
-                    direction = "LONG"
-                else:  # Short position
-                    side = "BUY"
-                    pos_side = "SHORT"
-                    direction = "SHORT"
-                    amt = abs(amt)
-                
-                # Cancel all open orders for this symbol first
-                try:
-                    _signed_request("DELETE", "/fapi/v1/allOpenOrders", {
-                        "symbol": sym,
-                        "timestamp": now_ts_ms()
-                    })
-                    log(f"[CANCEL ORDERS] {sym} - Cancelled all open orders")
-                except Exception as e:
-                    log(f"[CANCEL ORDERS WARN] {sym} - {e}")
-                
-                # Place market order to close position
-                close_order = _signed_request("POST", "/fapi/v1/order", {
-                    "symbol": sym,
-                    "side": side,
-                    "type": "MARKET",
-                    "quantity": f"{amt}",
-                    "positionSide": pos_side,
-                    "timestamp": now_ts_ms()
-                })
-                
-                closed_count += 1
-                
-                # Clear from position tracker
-                REAL_POSITIONS_TRACKER.pop(sym, None)
-                
-                # Clear trend lock to allow reopening
-                TREND_LOCK.pop(sym, None)
-                TREND_LOCK_TIME.pop(sym, None)
-                
-                pnl_str = f"{pos_info['unrealized_pnl']:.2f}"
-                log(f"[POSITION CLOSED] {sym} {direction} at mark price {pos_info['mark_price']:.8f}, PnL: {pnl_str} USDT")
-                tg_send(f"🔒 CLOSED {sym} {direction}\nMark: {pos_info['mark_price']:.8f}\nPnL: {pnl_str} USDT")
-                
-            except Exception as e:
-                log(f"[CLOSE POSITION ERR] {sym} - {e}")
-                continue
-        
-        log(f"[CLOSE ALL POSITIONS] Successfully closed {closed_count} positions")
-        return closed_count
-        
-    except Exception as e:
-        log(f"[CLOSE ALL POSITIONS ERR] {e}")
-        return 0
-
-def check_margin_balance_and_close_if_needed():
-    """
-    Check if margin balance has increased by target amount and close all positions if so.
-    This function:
-    1. Gets current margin balance
-    2. Compares with initial balance
-    3. If increase >= target, closes all positions and resets monitoring
-    
-    Throttled to check once per minute to avoid excessive API calls.
-    """
-    global MARGIN_BALANCE_INITIAL, MARGIN_BALANCE_MONITORING_ACTIVE, LAST_MARGIN_BALANCE_CHECK
-    
-    # Throttle: only check once per minute
-    now = now_ts_s()
-    if now - LAST_MARGIN_BALANCE_CHECK < 60:
-        return
-    LAST_MARGIN_BALANCE_CHECK = now
-    
-    # Get current balance
-    current_balance = get_margin_balance()
-    if current_balance is None:
-        log("[MARGIN MONITOR] Failed to get current balance")
-        return
-    
-    # Initialize monitoring if not started
-    if MARGIN_BALANCE_INITIAL is None or not MARGIN_BALANCE_MONITORING_ACTIVE:
-        MARGIN_BALANCE_INITIAL = current_balance
-        MARGIN_BALANCE_MONITORING_ACTIVE = True
-        log(f"[MARGIN MONITOR] Monitoring started. Initial balance: {MARGIN_BALANCE_INITIAL:.2f} USDT")
-        tg_send(f"💰 Margin balance monitoring started\nInitial balance: {MARGIN_BALANCE_INITIAL:.2f} USDT\nTarget: +{MARGIN_BALANCE_TARGET_INCREASE:.2f} USDT")
-        return
-    
-    # Calculate increase
-    balance_increase = current_balance - MARGIN_BALANCE_INITIAL
-    
-    # Log progress periodically (every 5 minutes = 5 checks)
-    if now % 300 < 60:  # Roughly every 5 minutes
-        log(f"[MARGIN MONITOR] Current: {current_balance:.2f} USDT, Initial: {MARGIN_BALANCE_INITIAL:.2f} USDT, Increase: {balance_increase:.2f} USDT (Target: +{MARGIN_BALANCE_TARGET_INCREASE:.2f})")
-    
-    # Check if target reached
-    if balance_increase >= MARGIN_BALANCE_TARGET_INCREASE:
-        log(f"[MARGIN MONITOR] ✅ Target reached! Balance increase: {balance_increase:.2f} USDT (>= {MARGIN_BALANCE_TARGET_INCREASE:.2f})")
-        tg_send(f"✅ TARGET REACHED!\nIncrease: {balance_increase:.2f} USDT\nClosing all positions at mark price...")
-        
-        # Close all positions
-        closed_count = close_all_positions_at_mark_price()
-        
-        # Wait a moment for positions to fully close
-        time.sleep(2)
-        
-        # Get new balance after closing
-        new_balance = get_margin_balance()
-        if new_balance is not None:
-            final_increase = new_balance - MARGIN_BALANCE_INITIAL
-            log(f"[MARGIN MONITOR] Positions closed. Final balance: {new_balance:.2f} USDT, Final increase: {final_increase:.2f} USDT")
-            tg_send(f"🔒 All positions closed!\nClosed: {closed_count} positions\nFinal balance: {new_balance:.2f} USDT\nTotal gain: {final_increase:.2f} USDT\n\n🔄 Restarting monitoring...")
-            
-            # Reset monitoring with new balance as initial
-            MARGIN_BALANCE_INITIAL = new_balance
-            MARGIN_BALANCE_MONITORING_ACTIVE = True
-            log(f"[MARGIN MONITOR] Monitoring restarted. New initial balance: {MARGIN_BALANCE_INITIAL:.2f} USDT")
-        else:
-            log("[MARGIN MONITOR] Failed to get balance after closing positions")
-            # Reset anyway
-            MARGIN_BALANCE_INITIAL = None
-            MARGIN_BALANCE_MONITORING_ACTIVE = False
-
 # ===================== POWER/TIER (Bilgi amaçlı) =====================
 
 def calc_power(e_now,e_prev,e_prev2,atr_v,price,rsi_val):
@@ -1969,13 +1777,15 @@ def tier_from_power(p):
 STATE_DEFAULT={
     "bar_index":0, "last_report":0, "auto_trade_active":True,
     "last_api_check":0, "long_blocked":False, "short_blocked":False,
-    "tg_update_offset":0
+    "tg_update_offset":0,
+    "initial_margin_balance":0.0, "last_profit_check_ts":0
 }
 PARAM_DEFAULT={
     "SCALP_TP_PCT":0.006, "SCALP_SL_PCT":0.20, "TRADE_SIZE_USDT":250.0,
     "MAX_BUY":30, "MAX_SELL":30,
     "ANGLE_MIN":0.00002, "FAST_EMA_PERIOD":3, "SLOW_EMA_PERIOD":7,
-    "ATR_SPIKE_RATIO":0.03, "SCALP_APPROVE_BARS":0
+    "ATR_SPIKE_RATIO":0.03, "SCALP_APPROVE_BARS":0,
+    "PROFIT_TARGET_USD":60.0
 }
 PARAM=safe_load(PARAM_FILE,PARAM_DEFAULT)
 if not isinstance(PARAM,dict): PARAM=PARAM_DEFAULT
@@ -2000,6 +1810,202 @@ def update_directional_limits():
     STATE["auto_trade_active"] = not (STATE["long_blocked"] and STATE["short_blocked"])
     safe_save(STATE_FILE,STATE)
     return live
+
+# ===================== CASH OUT / PROFIT TARGET =====================
+
+def get_account_balance():
+    """Fetch current futures account balance (margin balance)"""
+    try:
+        acc = _signed_request("GET", "/fapi/v2/account", {"timestamp": now_ts_ms()})
+        # Get total wallet balance (margin balance)
+        balance = float(acc.get("totalWalletBalance", 0))
+        return balance
+    except Exception as e:
+        log(f"[GET BALANCE ERR] {e}")
+        return None
+
+def get_unrealized_pnl():
+    """Get total unrealized PnL from all open positions"""
+    try:
+        acc = _signed_request("GET", "/fapi/v2/positionRisk", {"timestamp": now_ts_ms()})
+        total_pnl = sum(float(p.get("unRealizedProfit", 0)) for p in acc)
+        return total_pnl
+    except Exception as e:
+        log(f"[GET UNREALIZED PNL ERR] {e}")
+        return 0.0
+
+def close_all_positions_at_market(exit_reason="PROFIT_TARGET"):
+    """
+    Close all open positions at market price.
+    Args:
+        exit_reason: Reason for closing ("PROFIT_TARGET" or "MANUAL_CLOSE")
+    Returns list of closed position symbols.
+    """
+    closed_symbols = []
+    try:
+        # Get all open positions
+        acc = _signed_request("GET", "/fapi/v2/positionRisk", {"timestamp": now_ts_ms()})
+        
+        for p in acc:
+            amt = float(p["positionAmt"])
+            if amt == 0:  # Skip positions with no amount
+                continue
+            
+            sym = p["symbol"]
+            
+            # Determine side and position side
+            if amt > 0:  # Long position
+                side = "SELL"
+                pos_side = "LONG"
+            else:  # Short position
+                side = "BUY"
+                pos_side = "SHORT"
+                amt = abs(amt)
+            
+            # Place market close order
+            try:
+                payload = {
+                    "symbol": sym,
+                    "side": side,
+                    "type": "MARKET",
+                    "positionSide": pos_side,
+                    "closePosition": "true",
+                    "timestamp": now_ts_ms()
+                }
+                res = _signed_request("POST", "/fapi/v1/order", payload)
+                closed_symbols.append(sym)
+                log(f"[CLOSE ALL] {sym} {pos_side} closed at market")
+                
+                # Remove from trend lock
+                TREND_LOCK.pop(sym, None)
+                TREND_LOCK_TIME.pop(sym, None)
+                
+                # Log to closed trades with exit reason
+                entry_price = float(p.get("entryPrice", 0))
+                # Get mark price as exit price
+                try:
+                    mark_resp = requests.get(
+                        BINANCE_FAPI + "/fapi/v1/premiumIndex",
+                        params={"symbol": sym},
+                        timeout=5
+                    ).json()
+                    exit_price = float(mark_resp.get("markPrice", 0))
+                except:
+                    exit_price = None
+                
+                # Get position info from tracker if available
+                pos_info = REAL_POSITIONS_TRACKER.get(sym, {})
+                
+                # Calculate PnL percentage
+                direction = "UP" if pos_side == "LONG" else "DOWN"
+                if exit_price and entry_price > 0:
+                    if direction == "UP":
+                        pnl_pct = ((exit_price / entry_price) - 1) * 100
+                    else:
+                        pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+                else:
+                    pnl_pct = None
+                
+                closed_trade = {
+                    "symbol": sym,
+                    "direction": direction,
+                    "strategy": pos_info.get("kind", "UNKNOWN"),
+                    "tag": pos_info.get("tag", ""),
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "pnl_pct": pnl_pct,
+                    "power": pos_info.get("power"),
+                    "open_time": pos_info.get("open_time"),
+                    "close_time": now_local_iso(),
+                    "exit_reason": exit_reason,
+                    "market_state": pos_info.get("market_state", ""),
+                    "closed_by_profit_target": (exit_reason == "PROFIT_TARGET")
+                }
+                
+                REAL_CLOSED.append(closed_trade)
+                
+                # Remove from tracker
+                REAL_POSITIONS_TRACKER.pop(sym, None)
+                
+            except Exception as e:
+                log(f"[CLOSE ALL ERR] {sym} {e}")
+        
+        # Save closed trades
+        if closed_symbols:
+            safe_save(REAL_CLOSED_FILE, REAL_CLOSED)
+        
+        return closed_symbols
+    except Exception as e:
+        log(f"[CLOSE ALL POSITIONS ERR] {e}")
+        return []
+
+def check_profit_target():
+    """
+    Check if profit target has been reached.
+    If yes, close all positions and reset initial balance.
+    Throttled to run max once per 30 seconds.
+    """
+    global STATE
+    
+    # Throttle: only check every 30 seconds
+    now = now_ts_s()
+    if now - STATE.get("last_profit_check_ts", 0) < 30:
+        return
+    
+    STATE["last_profit_check_ts"] = now
+    
+    # Get initial balance
+    initial_balance = STATE.get("initial_margin_balance", 0)
+    
+    # If no initial balance is set, set it now
+    if initial_balance == 0:
+        current_balance = get_account_balance()
+        if current_balance:
+            STATE["initial_margin_balance"] = current_balance
+            safe_save(STATE_FILE, STATE)
+            log(f"[CASH OUT] Initial margin balance set: ${current_balance:.2f}")
+        return
+    
+    # Get current balance
+    current_balance = get_account_balance()
+    if not current_balance:
+        return
+    
+    # Calculate profit
+    profit = current_balance - initial_balance
+    
+    # Get profit target
+    profit_target = PARAM.get("PROFIT_TARGET_USD", 60.0)
+    
+    # Check if profit target reached
+    if profit >= profit_target:
+        log(f"[CASH OUT] Profit target reached! Profit: ${profit:.2f}, Target: ${profit_target:.2f}")
+        tg_send(f"💰 CASH OUT - Profit target reached!\n"
+                f"Initial Balance: ${initial_balance:.2f}\n"
+                f"Current Balance: ${current_balance:.2f}\n"
+                f"Profit: ${profit:.2f} (Target: ${profit_target:.2f})\n"
+                f"Closing all positions at mark price...")
+        
+        # Close all positions
+        closed_symbols = close_all_positions_at_market()
+        
+        if closed_symbols:
+            tg_send(f"✅ Closed {len(closed_symbols)} positions: {', '.join(closed_symbols[:10])}")
+            log(f"[CASH OUT] Closed {len(closed_symbols)} positions")
+        else:
+            tg_send(f"ℹ️ No open positions to close")
+        
+        # Get new balance after closing
+        time.sleep(2)  # Wait for orders to settle
+        new_balance = get_account_balance()
+        if new_balance:
+            STATE["initial_margin_balance"] = new_balance
+            safe_save(STATE_FILE, STATE)
+            final_profit = new_balance - initial_balance
+            tg_send(f"✅ Cash out complete!\n"
+                    f"New margin balance: ${new_balance:.2f}\n"
+                    f"Realized profit: ${final_profit:.2f}")
+            log(f"[CASH OUT] Complete. New balance: ${new_balance:.2f}, Realized: ${final_profit:.2f}")
 
 def heartbeat_and_status_check(_snapshot):
     now=time.time()
@@ -2097,15 +2103,6 @@ def _tg_set_offset(new_off):
 
 def _cmd_status():
     live=update_directional_limits()
-    
-    # Get margin balance info
-    balance_info = ""
-    if MARGIN_BALANCE_INITIAL is not None and MARGIN_BALANCE_MONITORING_ACTIVE:
-        current_balance = get_margin_balance()
-        if current_balance is not None:
-            increase = current_balance - MARGIN_BALANCE_INITIAL
-            balance_info = f" balance:+{increase:.2f}/{MARGIN_BALANCE_TARGET_INCREASE:.2f}"
-    
     tg_send(
         f"📊 /status bar:{STATE.get('bar_index')} "
         f"auto:{'✅' if STATE.get('auto_trade_active',True) else '🟥'} "
@@ -2113,7 +2110,6 @@ def _cmd_status():
         f"real_closed:{len(REAL_CLOSED)} "
         f"sim_open:{len([p for p in SIM_POSITIONS if p.get('status')=='OPEN'])} "
         f"sim_closed:{len(SIM_CLOSED)}"
-        f"{balance_info}"
     )
 
 def _cmd_report():
@@ -2147,53 +2143,107 @@ def _cmd_export():
         tg_send_file(fpath, f"📦 {os.path.basename(fpath)}")
 
 def _cmd_balance():
-    """Show current margin balance and monitoring status"""
-    current_balance = get_margin_balance()
-    if current_balance is None:
-        tg_send("❌ Failed to get margin balance")
-        return
-    
-    if MARGIN_BALANCE_INITIAL is not None and MARGIN_BALANCE_MONITORING_ACTIVE:
-        increase = current_balance - MARGIN_BALANCE_INITIAL
-        progress_pct = (increase / MARGIN_BALANCE_TARGET_INCREASE) * 100
-        tg_send(
-            f"💰 MARGIN BALANCE STATUS\n"
-            f"Current: {current_balance:.2f} USDT\n"
-            f"Initial: {MARGIN_BALANCE_INITIAL:.2f} USDT\n"
-            f"Increase: {increase:.2f} USDT\n"
-            f"Target: {MARGIN_BALANCE_TARGET_INCREASE:.2f} USDT\n"
-            f"Progress: {progress_pct:.1f}%\n"
-            f"Monitoring: {'✅ Active' if MARGIN_BALANCE_MONITORING_ACTIVE else '❌ Inactive'}"
-        )
-    else:
-        tg_send(
-            f"💰 MARGIN BALANCE\n"
-            f"Current: {current_balance:.2f} USDT\n"
-            f"Monitoring: ❌ Not started"
-        )
-
-def _cmd_resetbalance():
-    """Reset margin balance monitoring"""
-    global MARGIN_BALANCE_INITIAL, MARGIN_BALANCE_MONITORING_ACTIVE
-    MARGIN_BALANCE_INITIAL = None
-    MARGIN_BALANCE_MONITORING_ACTIVE = False
-    tg_send("🔄 Margin balance monitoring reset. Will restart on next check.")
+    """Show current balance and unrealized profit"""
+    try:
+        current_balance = get_account_balance()
+        if not current_balance:
+            tg_send("❌ Could not fetch balance")
+            return
+        
+        initial_balance = STATE.get("initial_margin_balance", 0)
+        if initial_balance == 0:
+            STATE["initial_margin_balance"] = current_balance
+            safe_save(STATE_FILE, STATE)
+            initial_balance = current_balance
+        
+        unrealized_pnl = get_unrealized_pnl()
+        profit = current_balance - initial_balance
+        profit_target = PARAM.get("PROFIT_TARGET_USD", 60.0)
+        
+        # Get open positions count
+        try:
+            acc = _signed_request("GET", "/fapi/v2/positionRisk", {"timestamp": now_ts_ms()})
+            open_positions = sum(1 for p in acc if float(p["positionAmt"]) != 0)
+        except:
+            open_positions = 0
+        
+        msg = (f"💰 BALANCE STATUS\n"
+               f"━━━━━━━━━━━━━━━━\n"
+               f"Initial Balance: ${initial_balance:.2f}\n"
+               f"Current Balance: ${current_balance:.2f}\n"
+               f"Unrealized PnL: ${unrealized_pnl:.2f}\n"
+               f"Profit: ${profit:.2f}\n"
+               f"Target: ${profit_target:.2f}\n"
+               f"Progress: {(profit/profit_target*100):.1f}%\n"
+               f"Open Positions: {open_positions}")
+        
+        tg_send(msg)
+    except Exception as e:
+        tg_send(f"❌ /balance error: {e}")
 
 def _cmd_settarget(args):
-    """Set margin balance target increase amount"""
-    global MARGIN_BALANCE_TARGET_INCREASE
+    """Set new profit target"""
     try:
         if not args:
-            tg_send(f"Current target: {MARGIN_BALANCE_TARGET_INCREASE:.2f} USDT\nUsage: /settarget <amount>")
+            tg_send("❌ Usage: /settarget <amount>\nExample: /settarget 100")
             return
+        
         new_target = float(args[0])
         if new_target <= 0:
             tg_send("❌ Target must be positive")
             return
-        MARGIN_BALANCE_TARGET_INCREASE = new_target
-        tg_send(f"✅ Margin balance target set to {MARGIN_BALANCE_TARGET_INCREASE:.2f} USDT")
+        
+        PARAM["PROFIT_TARGET_USD"] = new_target
+        safe_save(PARAM_FILE, PARAM)
+        tg_send(f"✅ Profit target set to ${new_target:.2f}")
+        log(f"[SETTARGET] Profit target changed to ${new_target:.2f}")
     except Exception as e:
-        tg_send(f"❌ Error: {e}\nUsage: /settarget <amount>")
+        tg_send(f"❌ /settarget error: {e}")
+
+def _cmd_resettarget():
+    """Reset margin balance to current value"""
+    try:
+        current_balance = get_account_balance()
+        if not current_balance:
+            tg_send("❌ Could not fetch balance")
+            return
+        
+        old_balance = STATE.get("initial_margin_balance", 0)
+        STATE["initial_margin_balance"] = current_balance
+        safe_save(STATE_FILE, STATE)
+        
+        tg_send(f"✅ Margin balance reset\n"
+                f"Old: ${old_balance:.2f}\n"
+                f"New: ${current_balance:.2f}")
+        log(f"[RESETTARGET] Margin balance reset from ${old_balance:.2f} to ${current_balance:.2f}")
+    except Exception as e:
+        tg_send(f"❌ /resettarget error: {e}")
+
+def _cmd_closeall():
+    """Manually close all open positions"""
+    try:
+        # Get open positions count first
+        acc = _signed_request("GET", "/fapi/v2/positionRisk", {"timestamp": now_ts_ms()})
+        open_count = sum(1 for p in acc if float(p["positionAmt"]) != 0)
+        
+        if open_count == 0:
+            tg_send("ℹ️ No open positions to close")
+            return
+        
+        tg_send(f"🔄 Closing {open_count} open positions at market price...")
+        
+        closed_symbols = close_all_positions_at_market(exit_reason="MANUAL_CLOSE")
+        
+        if closed_symbols:
+            tg_send(f"✅ Closed {len(closed_symbols)} positions: {', '.join(closed_symbols[:10])}")
+            if len(closed_symbols) > 10:
+                tg_send(f"... and {len(closed_symbols) - 10} more")
+            log(f"[CLOSEALL] Manually closed {len(closed_symbols)} positions")
+        else:
+            tg_send("❌ Failed to close positions")
+    except Exception as e:
+        tg_send(f"❌ /closeall error: {e}")
+        log(f"[CLOSEALL ERR] {e}")
 
 def check_telegram_commands():
     if not BOT_TOKEN or not CHAT_ID: return
@@ -2214,10 +2264,15 @@ def check_telegram_commands():
         elif cmd=="/set" and args: _cmd_set(args)
         elif cmd=="/export": _cmd_export()
         elif cmd=="/balance": _cmd_balance()
-        elif cmd=="/resetbalance": _cmd_resetbalance()
         elif cmd=="/settarget": _cmd_settarget(args)
+        elif cmd=="/resettarget": _cmd_resettarget()
+        elif cmd=="/closeall": _cmd_closeall()
         else:
-            tg_send("Komutlar: /status, /report, /set KEY VALUE, /export, /balance, /resetbalance, /settarget <amount>")
+            tg_send("Komutlar: /status, /report, /set KEY VALUE, /export\n"
+                    "/balance - Show balance and profit\n"
+                    "/settarget <amount> - Set profit target\n"
+                    "/resettarget - Reset margin balance\n"
+                    "/closeall - Close all positions")
 
 # ===================== SMART TP =====================
 
@@ -2453,27 +2508,7 @@ def main():
     while True:
         try:
             # Telegram komutları
-            updates=_tg_get_updates()
-            if updates:
-                for up in updates:
-                    _tg_set_offset(up["update_id"]+1)
-                    msg=up.get("message") or up.get("edited_message")
-                    if not msg: continue
-                    chat_id = str(msg.get("chat",{}).get("id"))
-                    if chat_id != str(CHAT_ID):  # tek chat filtre
-                        continue
-                    text=msg.get("text","").strip()
-                    if not text.startswith("/"): continue
-                    parts=text.split(); cmd=parts[0].lower(); args=parts[1:]
-                    if cmd=="/status": _cmd_status()
-                    elif cmd=="/report": _cmd_report()
-                    elif cmd=="/set" and args: _cmd_set(args)
-                    elif cmd=="/export": _cmd_export()
-                    elif cmd=="/balance": _cmd_balance()
-                    elif cmd=="/resetbalance": _cmd_resetbalance()
-                    elif cmd=="/settarget": _cmd_settarget(args)
-                    else:
-                        tg_send("Komutlar: /status, /report, /set KEY VALUE, /export, /balance, /resetbalance, /settarget <amount>")
+            check_telegram_commands()
 
             # bar index
             STATE["bar_index"]=STATE.get("bar_index",0)+1
@@ -2498,8 +2533,8 @@ def main():
             # 3.1) Check and log real closed trades
             check_and_log_real_closed_trades()
             
-            # 3.2) Check margin balance and close positions if target reached
-            check_margin_balance_and_close_if_needed()
+            # 3.2) Check profit target (cash out feature)
+            check_profit_target()
 
             # 4) 4 saatlik auto-backup
             auto_report_if_due()
