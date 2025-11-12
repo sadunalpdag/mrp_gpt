@@ -1779,7 +1779,8 @@ STATE_DEFAULT={
     "last_api_check":0, "long_blocked":False, "short_blocked":False,
     "cest_long_blocked":False, "cest_short_blocked":False,
     "tg_update_offset":0,
-    "initial_margin_balance":0.0, "last_profit_check_ts":0
+    "initial_margin_balance":0.0, "last_profit_check_ts":0,
+    "last_hourly_margin_log":0
 }
 PARAM_DEFAULT={
     "SCALP_TP_PCT":0.006, "SCALP_SL_PCT":0.20, "TRADE_SIZE_USDT":250.0,
@@ -2018,6 +2019,93 @@ def check_profit_target():
                     f"New margin balance: ${new_balance:.2f}\n"
                     f"Realized profit: ${final_profit:.2f}")
             log(f"[CASH OUT] Complete. New balance: ${new_balance:.2f}, Realized: ${final_profit:.2f}")
+
+def send_hourly_margin_log():
+    """
+    Send hourly Telegram log showing how much is left until margin cashout target.
+    This runs once per hour to keep users informed of progress.
+    """
+    global STATE
+    
+    # Check if an hour has passed since last log
+    now = now_ts_s()
+    last_log = STATE.get("last_hourly_margin_log", 0)
+    
+    # Hourly check: 3600 seconds = 1 hour
+    if now - last_log < 3600:
+        return
+    
+    # Update last log time
+    STATE["last_hourly_margin_log"] = now
+    safe_save(STATE_FILE, STATE)
+    
+    try:
+        # Get current balance
+        current_balance = get_account_balance()
+        if not current_balance:
+            log("[HOURLY MARGIN LOG] Could not fetch balance")
+            return
+        
+        # Get initial balance
+        initial_balance = STATE.get("initial_margin_balance", 0)
+        
+        # If no initial balance is set, set it now and skip this log
+        if initial_balance == 0:
+            STATE["initial_margin_balance"] = current_balance
+            safe_save(STATE_FILE, STATE)
+            log(f"[HOURLY MARGIN LOG] Initial margin balance set: ${current_balance:.2f}")
+            return
+        
+        # Get profit target
+        profit_target = PARAM.get("PROFIT_TARGET_USD", 60.0)
+        
+        # Calculate current profit
+        current_profit = current_balance - initial_balance
+        
+        # Calculate remaining to target
+        remaining = profit_target - current_profit
+        
+        # Calculate progress percentage
+        progress_pct = (current_profit / profit_target * 100) if profit_target > 0 else 0
+        
+        # Get unrealized PnL
+        unrealized_pnl = get_unrealized_pnl()
+        
+        # Get open positions count
+        try:
+            acc = _signed_request("GET", "/fapi/v2/positionRisk", {"timestamp": now_ts_ms()})
+            open_positions = sum(1 for p in acc if float(p["positionAmt"]) != 0)
+        except:
+            open_positions = 0
+        
+        # Send the hourly log
+        if remaining > 0:
+            msg = (f"⏰ HOURLY MARGIN UPDATE\n"
+                   f"━━━━━━━━━━━━━━━━\n"
+                   f"💰 Current Profit: ${current_profit:.2f}\n"
+                   f"🎯 Target: ${profit_target:.2f}\n"
+                   f"📊 Remaining: ${remaining:.2f}\n"
+                   f"📈 Progress: {progress_pct:.1f}%\n"
+                   f"💵 Unrealized PnL: ${unrealized_pnl:.2f}\n"
+                   f"📌 Open Positions: {open_positions}\n"
+                   f"⏱️ {now_local_iso()}")
+        else:
+            # Target already reached (shouldn't normally happen as positions would be closed)
+            msg = (f"⏰ HOURLY MARGIN UPDATE\n"
+                   f"━━━━━━━━━━━━━━━━\n"
+                   f"✅ TARGET REACHED!\n"
+                   f"💰 Current Profit: ${current_profit:.2f}\n"
+                   f"🎯 Target: ${profit_target:.2f}\n"
+                   f"📊 Excess: ${-remaining:.2f}\n"
+                   f"💵 Unrealized PnL: ${unrealized_pnl:.2f}\n"
+                   f"📌 Open Positions: {open_positions}\n"
+                   f"⏱️ {now_local_iso()}")
+        
+        tg_send(msg)
+        log(f"[HOURLY MARGIN LOG] Sent. Profit: ${current_profit:.2f}, Remaining: ${remaining:.2f}")
+        
+    except Exception as e:
+        log(f"[HOURLY MARGIN LOG ERR] {e}")
 
 def heartbeat_and_status_check(_snapshot):
     now=time.time()
@@ -2560,6 +2648,9 @@ def main():
             
             # 3.2) Check profit target (cash out feature)
             check_profit_target()
+            
+            # 3.3) Send hourly margin progress log
+            send_hourly_margin_log()
 
             # 4) 4 saatlik auto-backup
             auto_report_if_due()
