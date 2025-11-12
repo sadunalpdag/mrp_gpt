@@ -37,6 +37,7 @@ REAL_CLOSED_FILE = os.path.join(DATA_DIR,"real_closed.json")
 SIM_POS_FILE     = os.path.join(DATA_DIR,"sim_positions.json")
 SIM_CLOSED_FILE  = os.path.join(DATA_DIR,"sim_closed.json")
 LOG_FILE         = os.path.join(DATA_DIR,"log.txt")
+BALANCE_HISTORY_FILE = os.path.join(DATA_DIR,"balance_history.json")
 
 BOT_TOKEN      = os.getenv("BOT_TOKEN")
 CHAT_ID        = os.getenv("CHAT_ID")
@@ -1474,6 +1475,7 @@ AI_RL         = safe_load(AI_RL_FILE,[])
 REAL_CLOSED   = safe_load(REAL_CLOSED_FILE,[])
 SIM_POSITIONS = safe_load(SIM_POS_FILE,[])
 SIM_CLOSED    = safe_load(SIM_CLOSED_FILE,[])
+BALANCE_HISTORY = safe_load(BALANCE_HISTORY_FILE,[])
 
 def enrich_with_ai_context(pos):
     best=None
@@ -2024,8 +2026,9 @@ def send_hourly_margin_log():
     """
     Send hourly Telegram log showing how much is left until margin cashout target.
     This runs once per hour to keep users informed of progress.
+    Also tracks balance changes history and estimates time to target.
     """
-    global STATE
+    global STATE, BALANCE_HISTORY
     
     # Check if an hour has passed since last log
     now = now_ts_s()
@@ -2078,6 +2081,50 @@ def send_hourly_margin_log():
         except:
             open_positions = 0
         
+        # Calculate estimated hours to target based on recent profit rate
+        estimated_hours = None
+        profit_per_hour = None
+        
+        if len(BALANCE_HISTORY) > 0 and remaining > 0:
+            # Get the last balance record
+            last_record = BALANCE_HISTORY[-1]
+            last_balance = last_record.get("balance", initial_balance)
+            last_timestamp = last_record.get("timestamp", now - 3600)
+            
+            # Calculate profit change since last record
+            balance_change = current_balance - last_balance
+            time_elapsed_hours = (now - last_timestamp) / 3600.0
+            
+            if time_elapsed_hours > 0 and balance_change > 0:
+                # Calculate profit per hour
+                profit_per_hour = balance_change / time_elapsed_hours
+                # Estimate hours to reach target
+                estimated_hours = remaining / profit_per_hour
+        
+        # Record this balance change in history
+        balance_record = {
+            "timestamp": now,
+            "time": now_local_iso(),
+            "balance": current_balance,
+            "initial_balance": initial_balance,
+            "current_profit": current_profit,
+            "target": profit_target,
+            "remaining": remaining,
+            "progress_pct": progress_pct,
+            "unrealized_pnl": unrealized_pnl,
+            "open_positions": open_positions,
+            "profit_per_hour": profit_per_hour,
+            "estimated_hours_to_target": estimated_hours
+        }
+        
+        BALANCE_HISTORY.append(balance_record)
+        
+        # Keep only last 1000 records to prevent file from growing too large
+        if len(BALANCE_HISTORY) > 1000:
+            BALANCE_HISTORY[:] = BALANCE_HISTORY[-1000:]
+        
+        safe_save(BALANCE_HISTORY_FILE, BALANCE_HISTORY)
+        
         # Send the hourly log
         if remaining > 0:
             msg = (f"⏰ HOURLY MARGIN UPDATE\n"
@@ -2087,8 +2134,17 @@ def send_hourly_margin_log():
                    f"📊 Remaining: ${remaining:.2f}\n"
                    f"📈 Progress: {progress_pct:.1f}%\n"
                    f"💵 Unrealized PnL: ${unrealized_pnl:.2f}\n"
-                   f"📌 Open Positions: {open_positions}\n"
-                   f"⏱️ {now_local_iso()}")
+                   f"📌 Open Positions: {open_positions}")
+            
+            # Add estimated time to target if available
+            if estimated_hours is not None:
+                if estimated_hours < 1:
+                    minutes = int(estimated_hours * 60)
+                    msg += f"\n⏱️ Est. Time to Target: ~{minutes} min"
+                else:
+                    msg += f"\n⏱️ Est. Time to Target: ~{estimated_hours:.1f} hrs"
+            
+            msg += f"\n🕐 {now_local_iso()}"
         else:
             # Target already reached (shouldn't normally happen as positions would be closed)
             msg = (f"⏰ HOURLY MARGIN UPDATE\n"
@@ -2099,10 +2155,10 @@ def send_hourly_margin_log():
                    f"📊 Excess: ${-remaining:.2f}\n"
                    f"💵 Unrealized PnL: ${unrealized_pnl:.2f}\n"
                    f"📌 Open Positions: {open_positions}\n"
-                   f"⏱️ {now_local_iso()}")
+                   f"🕐 {now_local_iso()}")
         
         tg_send(msg)
-        log(f"[HOURLY MARGIN LOG] Sent. Profit: ${current_profit:.2f}, Remaining: ${remaining:.2f}")
+        log(f"[HOURLY MARGIN LOG] Sent. Profit: ${current_profit:.2f}, Remaining: ${remaining:.2f}, Est: {estimated_hours:.1f}h" if estimated_hours else f"[HOURLY MARGIN LOG] Sent. Profit: ${current_profit:.2f}, Remaining: ${remaining:.2f}")
         
     except Exception as e:
         log(f"[HOURLY MARGIN LOG ERR] {e}")
