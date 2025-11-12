@@ -232,6 +232,235 @@ def analyze_strategy_time_performance(opened_trades, closed_trades):
         print(f"  - Average duration: {best_ratio[5]:.2f} minutes ({best_ratio[5]/60:.2f} hours)")
         print("="*70)
 
+def analyze_open_trades(opened_trades, closed_trades):
+    """
+    Option 6: Analyze currently open trades
+    Shows how long trades have been open, their power values, and strategy
+    """
+    print("\n" + "="*70)
+    print("OPTION 6: CURRENTLY OPEN TRADES ANALYSIS")
+    print("="*70)
+    
+    # Get current time with UTC timezone
+    from datetime import timezone
+    current_time = datetime.now(timezone.utc)
+    
+    # Find trades that are still open (in opened_trades but not in closed_trades)
+    closed_symbols_times = set()
+    for trade in closed_trades:
+        symbol = trade.get('symbol')
+        open_time = trade.get('open_time')
+        if symbol and open_time:
+            closed_symbols_times.add((symbol, open_time))
+    
+    open_trades_info = []
+    for trade in opened_trades:
+        symbol = trade.get('symbol')
+        time = trade.get('time')
+        if symbol and time:
+            # Check if this trade is not in closed trades
+            if (symbol, time) not in closed_symbols_times:
+                open_time = parse_time(time)
+                if open_time:
+                    duration = (current_time - open_time).total_seconds() / 3600  # in hours
+                    strategy = trade.get('kind', 'UNKNOWN')
+                    power = trade.get('power', 0)
+                    direction = trade.get('dir', 'UNKNOWN')
+                    open_trades_info.append({
+                        'symbol': symbol,
+                        'strategy': strategy,
+                        'direction': direction,
+                        'power': power,
+                        'open_time': time,
+                        'hours_open': duration,
+                        'entry': trade.get('entry')
+                    })
+    
+    # Sort by hours open (descending)
+    open_trades_info.sort(key=lambda x: x['hours_open'], reverse=True)
+    
+    print(f"\nTotal Currently Open Trades: {len(open_trades_info)}")
+    print(f"\n{'Symbol':<15} {'Strategy':<15} {'Dir':<6} {'Power':<10} {'Hours Open':<12} {'Entry Price':<12} {'Open Time':<25}")
+    print("-" * 110)
+    
+    for trade in open_trades_info:
+        print(f"{trade['symbol']:<15} {trade['strategy']:<15} {trade['direction']:<6} "
+              f"{trade['power']:<10.2f} {trade['hours_open']:<12.2f} "
+              f"{trade['entry']:<12.6f} {trade['open_time']:<25}")
+    
+    # Summary statistics
+    if open_trades_info:
+        print("\n" + "="*70)
+        print("SUMMARY STATISTICS:")
+        print("-" * 70)
+        
+        total_hours = sum(t['hours_open'] for t in open_trades_info)
+        avg_hours = total_hours / len(open_trades_info)
+        max_hours = max(t['hours_open'] for t in open_trades_info)
+        min_hours = min(t['hours_open'] for t in open_trades_info)
+        
+        avg_power = sum(t['power'] for t in open_trades_info) / len(open_trades_info)
+        max_power = max(t['power'] for t in open_trades_info)
+        min_power = min(t['power'] for t in open_trades_info)
+        
+        print(f"Average time open: {avg_hours:.2f} hours")
+        print(f"Maximum time open: {max_hours:.2f} hours")
+        print(f"Minimum time open: {min_hours:.2f} hours")
+        print(f"\nAverage power: {avg_power:.2f}")
+        print(f"Maximum power: {max_power:.2f}")
+        print(f"Minimum power: {min_power:.2f}")
+        
+        # Group by strategy
+        strategy_counts = Counter(t['strategy'] for t in open_trades_info)
+        print("\nOpen trades by strategy:")
+        for strategy, count in strategy_counts.most_common():
+            print(f"  - {strategy}: {count} trades")
+        
+        print("="*70)
+
+def analyze_open_transaction_ratio(opened_trades, closed_trades):
+    """
+    Option 7: Show total open transaction ratio
+    Displays the ratio of closed to opened trades
+    """
+    print("\n" + "="*70)
+    print("OPTION 7: OPEN TRANSACTION RATIO ANALYSIS")
+    print("="*70)
+    
+    total_opened = len(opened_trades)
+    total_closed = len(closed_trades)
+    total_still_open = total_opened - total_closed
+    
+    close_ratio = (total_closed / total_opened * 100) if total_opened > 0 else 0
+    open_ratio = (total_still_open / total_opened * 100) if total_opened > 0 else 0
+    
+    print(f"\nTotal Opened Trades: {total_opened}")
+    print(f"Total Closed Trades: {total_closed}")
+    print(f"Currently Open Trades: {total_still_open}")
+    print(f"\nClosed Ratio: {close_ratio:.2f}%")
+    print(f"Still Open Ratio: {open_ratio:.2f}%")
+    
+    # Breakdown by strategy
+    print("\n" + "="*70)
+    print("BREAKDOWN BY STRATEGY:")
+    print("-" * 70)
+    print(f"{'Strategy':<30} {'Opened':>10} {'Closed':>10} {'Still Open':>12} {'Close %':>10} {'Open %':>10}")
+    print("-" * 90)
+    
+    # Count opened trades by strategy
+    opened_by_strategy = Counter()
+    for trade in opened_trades:
+        strategy = trade.get('kind', 'UNKNOWN')
+        opened_by_strategy[strategy] += 1
+    
+    # Count closed trades by strategy
+    closed_by_strategy = Counter()
+    for trade in closed_trades:
+        strategy = trade.get('strategy', 'UNKNOWN')
+        closed_by_strategy[strategy] += 1
+    
+    all_strategies = set(opened_by_strategy.keys()) | set(closed_by_strategy.keys())
+    
+    for strategy in sorted(all_strategies):
+        opened = opened_by_strategy[strategy]
+        closed = closed_by_strategy[strategy]
+        still_open = opened - closed
+        close_pct = (closed / opened * 100) if opened > 0 else 0
+        open_pct = (still_open / opened * 100) if opened > 0 else 0
+        
+        print(f"{strategy:<30} {opened:>10} {closed:>10} {still_open:>12} {close_pct:>9.1f}% {open_pct:>9.1f}%")
+    
+    print("="*70)
+
+def analyze_open_trades_by_power(opened_trades, closed_trades):
+    """
+    Option 8: Analyze currently open trades by power ranges
+    Shows how long open trades have been open, grouped by power ranges
+    """
+    print("\n" + "="*70)
+    print("OPTION 8: OPEN TRADES BY POWER RANGE ANALYSIS")
+    print("="*70)
+    
+    # Get current time with UTC timezone
+    from datetime import timezone
+    current_time = datetime.now(timezone.utc)
+    
+    # Find trades that are still open
+    closed_symbols_times = set()
+    for trade in closed_trades:
+        symbol = trade.get('symbol')
+        open_time = trade.get('open_time')
+        if symbol and open_time:
+            closed_symbols_times.add((symbol, open_time))
+    
+    # Collect open trades by power range
+    power_strategy_open = defaultdict(lambda: defaultdict(list))
+    
+    for trade in opened_trades:
+        symbol = trade.get('symbol')
+        time = trade.get('time')
+        power = trade.get('power')
+        
+        if symbol and time and power is not None:
+            # Check if this trade is not in closed trades
+            if (symbol, time) not in closed_symbols_times:
+                open_time = parse_time(time)
+                if open_time:
+                    duration = (current_time - open_time).total_seconds() / 3600  # in hours
+                    strategy = trade.get('kind', 'UNKNOWN')
+                    power_range = int(power)
+                    power_strategy_open[power_range][strategy].append(duration)
+    
+    # Display results
+    print("\nCurrently Open Trades by Power Range and Strategy:")
+    print(f"{'Power Range':<15} {'Strategy':<20} {'Count':>10} {'Avg Hours Open':>18} {'Max Hours Open':>18}")
+    print("-" * 90)
+    
+    all_stats = []
+    for power_range in sorted(power_strategy_open.keys()):
+        range_label = f"{power_range}-{power_range+1}"
+        
+        for strategy in sorted(power_strategy_open[power_range].keys()):
+            durations = power_strategy_open[power_range][strategy]
+            count = len(durations)
+            avg_duration = sum(durations) / len(durations)
+            max_duration = max(durations)
+            
+            all_stats.append((power_range, strategy, count, avg_duration, max_duration))
+            print(f"{range_label:<15} {strategy:<20} {count:>10} {avg_duration:>18.2f} {max_duration:>18.2f}")
+    
+    # Summary by power range
+    print("\n" + "="*70)
+    print("SUMMARY BY POWER RANGE (All Strategies):")
+    print("-" * 90)
+    print(f"{'Power Range':<15} {'Total Open':>12} {'Avg Hours Open':>18} {'Max Hours Open':>18}")
+    print("-" * 90)
+    
+    for power_range in sorted(power_strategy_open.keys()):
+        range_label = f"{power_range}-{power_range+1}"
+        all_durations = []
+        
+        for strategy_durations in power_strategy_open[power_range].values():
+            all_durations.extend(strategy_durations)
+        
+        if all_durations:
+            count = len(all_durations)
+            avg_duration = sum(all_durations) / len(all_durations)
+            max_duration = max(all_durations)
+            print(f"{range_label:<15} {count:>12} {avg_duration:>18.2f} {max_duration:>18.2f}")
+    
+    # Find longest open trade
+    if all_stats:
+        longest = max(all_stats, key=lambda x: x[4])
+        print("\n" + "="*70)
+        print(f"LONGEST OPEN TRADE:")
+        print(f"  - Power Range: {longest[0]}-{longest[0]+1}")
+        print(f"  - Strategy: {longest[1]}")
+        print(f"  - Count in this range: {longest[2]}")
+        print(f"  - Average hours open: {longest[3]:.2f} hours")
+        print(f"  - Maximum hours open: {longest[4]:.2f} hours")
+        print("="*70)
+
 def analyze_power_based_performance(opened_trades, closed_trades):
     """
     Option 5: Analyze trades by power ranges with step increments
@@ -376,10 +605,14 @@ def main():
         print("3. Which strategy closes fastest by time period? (with open/closed ratio)")
         print("4. Run all analyses")
         print("5. Power-based analysis (closing speed by power ranges)")
+        print("6. Analyze currently open trades (hours open, power values)")
+        print("7. Show total open transaction ratio")
+        print("8. Analyze open trades by power ranges")
+        print("9. Run all open trade analyses (6+7+8)")
         print("0. Exit")
         print("="*70)
         
-        choice = input("\nEnter your choice (0-5): ").strip()
+        choice = input("\nEnter your choice (0-9): ").strip()
         
         if choice == '1':
             analyze_strategy_effectiveness(opened_trades, closed_trades)
@@ -394,11 +627,21 @@ def main():
             analyze_power_based_performance(opened_trades, closed_trades)
         elif choice == '5':
             analyze_power_based_performance(opened_trades, closed_trades)
+        elif choice == '6':
+            analyze_open_trades(opened_trades, closed_trades)
+        elif choice == '7':
+            analyze_open_transaction_ratio(opened_trades, closed_trades)
+        elif choice == '8':
+            analyze_open_trades_by_power(opened_trades, closed_trades)
+        elif choice == '9':
+            analyze_open_trades(opened_trades, closed_trades)
+            analyze_open_transaction_ratio(opened_trades, closed_trades)
+            analyze_open_trades_by_power(opened_trades, closed_trades)
         elif choice == '0':
             print("\nExiting... Goodbye!")
             break
         else:
-            print("\nInvalid choice. Please select 0-5.")
+            print("\nInvalid choice. Please select 0-9.")
 
 if __name__ == '__main__':
     main()
