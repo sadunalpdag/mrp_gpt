@@ -37,6 +37,7 @@ REAL_CLOSED_FILE = os.path.join(DATA_DIR,"real_closed.json")
 SIM_POS_FILE     = os.path.join(DATA_DIR,"sim_positions.json")
 SIM_CLOSED_FILE  = os.path.join(DATA_DIR,"sim_closed.json")
 LOG_FILE         = os.path.join(DATA_DIR,"log.txt")
+BALANCE_HISTORY_FILE = os.path.join(DATA_DIR,"balance_history.json")
 
 BOT_TOKEN      = os.getenv("BOT_TOKEN")
 CHAT_ID        = os.getenv("CHAT_ID")
@@ -1474,6 +1475,7 @@ AI_RL         = safe_load(AI_RL_FILE,[])
 REAL_CLOSED   = safe_load(REAL_CLOSED_FILE,[])
 SIM_POSITIONS = safe_load(SIM_POS_FILE,[])
 SIM_CLOSED    = safe_load(SIM_CLOSED_FILE,[])
+BALANCE_HISTORY = safe_load(BALANCE_HISTORY_FILE,[])
 
 def enrich_with_ai_context(pos):
     best=None
@@ -1779,7 +1781,8 @@ STATE_DEFAULT={
     "last_api_check":0, "long_blocked":False, "short_blocked":False,
     "cest_long_blocked":False, "cest_short_blocked":False,
     "tg_update_offset":0,
-    "initial_margin_balance":0.0, "last_profit_check_ts":0
+    "initial_margin_balance":0.0, "last_profit_check_ts":0,
+    "last_hourly_margin_log":0
 }
 PARAM_DEFAULT={
     "SCALP_TP_PCT":0.006, "SCALP_SL_PCT":0.20, "TRADE_SIZE_USDT":250.0,
@@ -2018,6 +2021,170 @@ def check_profit_target():
                     f"New margin balance: ${new_balance:.2f}\n"
                     f"Realized profit: ${final_profit:.2f}")
             log(f"[CASH OUT] Complete. New balance: ${new_balance:.2f}, Realized: ${final_profit:.2f}")
+
+def send_hourly_margin_log():
+    """
+    Send hourly Telegram log showing how much is left until margin cashout target.
+    This runs once per hour to keep users informed of progress.
+    Also tracks balance changes history and estimates time to target.
+    """
+    global STATE, BALANCE_HISTORY
+    
+    # Check if an hour has passed since last log
+    now = now_ts_s()
+    last_log = STATE.get("last_hourly_margin_log", 0)
+    
+    # Hourly check: 3600 seconds = 1 hour
+    if now - last_log < 3600:
+        return
+    
+    # Update last log time
+    STATE["last_hourly_margin_log"] = now
+    safe_save(STATE_FILE, STATE)
+    
+    try:
+        # Get current balance
+        current_balance = get_account_balance()
+        if not current_balance:
+            log("[HOURLY MARGIN LOG] Could not fetch balance")
+            return
+        
+        # Get initial balance
+        initial_balance = STATE.get("initial_margin_balance", 0)
+        
+        # If no initial balance is set, set it now and skip this log
+        if initial_balance == 0:
+            STATE["initial_margin_balance"] = current_balance
+            safe_save(STATE_FILE, STATE)
+            log(f"[HOURLY MARGIN LOG] Initial margin balance set: ${current_balance:.2f}")
+            return
+        
+        # Get profit target
+        profit_target = PARAM.get("PROFIT_TARGET_USD", 60.0)
+        
+        # Calculate current profit
+        current_profit = current_balance - initial_balance
+        
+        # Calculate remaining to target
+        remaining = profit_target - current_profit
+        
+        # Calculate progress percentage
+        progress_pct = (current_profit / profit_target * 100) if profit_target > 0 else 0
+        
+        # Get unrealized PnL
+        unrealized_pnl = get_unrealized_pnl()
+        
+        # Get open positions count and CEST positions
+        try:
+            acc = _signed_request("GET", "/fapi/v2/positionRisk", {"timestamp": now_ts_ms()})
+            open_positions = 0
+            cest_long_count = 0
+            cest_short_count = 0
+            
+            for p in acc:
+                amt = float(p["positionAmt"])
+                if amt != 0:
+                    open_positions += 1
+                    sym = p["symbol"]
+                    
+                    # Check if this is a CEST position
+                    if sym in REAL_POSITIONS_TRACKER and REAL_POSITIONS_TRACKER[sym].get("kind") == "CEST":
+                        if amt > 0:
+                            cest_long_count += 1
+                        else:
+                            cest_short_count += 1
+        except:
+            open_positions = 0
+            cest_long_count = 0
+            cest_short_count = 0
+        
+        # Calculate estimated hours to target based on recent profit rate
+        estimated_hours = None
+        profit_per_hour = None
+        
+        if len(BALANCE_HISTORY) > 0 and remaining > 0:
+            # Get the last balance record
+            last_record = BALANCE_HISTORY[-1]
+            last_balance = last_record.get("balance", initial_balance)
+            last_timestamp = last_record.get("timestamp", now - 3600)
+            
+            # Calculate profit change since last record
+            balance_change = current_balance - last_balance
+            time_elapsed_hours = (now - last_timestamp) / 3600.0
+            
+            if time_elapsed_hours > 0 and balance_change > 0:
+                # Calculate profit per hour
+                profit_per_hour = balance_change / time_elapsed_hours
+                # Estimate hours to reach target
+                estimated_hours = remaining / profit_per_hour
+        
+        # Record this balance change in history
+        balance_record = {
+            "timestamp": now,
+            "time": now_local_iso(),
+            "balance": current_balance,
+            "initial_balance": initial_balance,
+            "current_profit": current_profit,
+            "target": profit_target,
+            "remaining": remaining,
+            "progress_pct": progress_pct,
+            "unrealized_pnl": unrealized_pnl,
+            "open_positions": open_positions,
+            "cest_long_count": cest_long_count,
+            "cest_short_count": cest_short_count,
+            "profit_per_hour": profit_per_hour,
+            "estimated_hours_to_target": estimated_hours
+        }
+        
+        BALANCE_HISTORY.append(balance_record)
+        
+        # Keep only last 1000 records to prevent file from growing too large
+        if len(BALANCE_HISTORY) > 1000:
+            BALANCE_HISTORY[:] = BALANCE_HISTORY[-1000:]
+        
+        safe_save(BALANCE_HISTORY_FILE, BALANCE_HISTORY)
+        
+        # Send the hourly log
+        if remaining > 0:
+            msg = (f"⏰ HOURLY MARGIN UPDATE\n"
+                   f"━━━━━━━━━━━━━━━━\n"
+                   f"💰 Current Profit: ${current_profit:.2f}\n"
+                   f"🎯 Target: ${profit_target:.2f}\n"
+                   f"📊 Remaining: ${remaining:.2f}\n"
+                   f"📈 Progress: {progress_pct:.1f}%\n"
+                   f"💵 Unrealized PnL: ${unrealized_pnl:.2f}\n"
+                   f"📌 Open Positions: {open_positions}\n"
+                   f"🧩 CEST Long: {cest_long_count}/{PARAM.get('MAX_CEST_BUY', 15)}\n"
+                   f"🧩 CEST Short: {cest_short_count}/{PARAM.get('MAX_CEST_SELL', 15)}")
+            
+            # Add estimated time to target if available
+            if estimated_hours is not None:
+                if estimated_hours < 1:
+                    minutes = int(estimated_hours * 60)
+                    msg += f"\n⏱️ Est. Time to Target: ~{minutes} min"
+                else:
+                    msg += f"\n⏱️ Est. Time to Target: ~{estimated_hours:.1f} hrs"
+            
+            msg += f"\n🕐 {now_local_iso()}"
+        else:
+            # Target already reached (shouldn't normally happen as positions would be closed)
+            msg = (f"⏰ HOURLY MARGIN UPDATE\n"
+                   f"━━━━━━━━━━━━━━━━\n"
+                   f"✅ TARGET REACHED!\n"
+                   f"💰 Current Profit: ${current_profit:.2f}\n"
+                   f"🎯 Target: ${profit_target:.2f}\n"
+                   f"📊 Excess: ${-remaining:.2f}\n"
+                   f"💵 Unrealized PnL: ${unrealized_pnl:.2f}\n"
+                   f"📌 Open Positions: {open_positions}\n"
+                   f"🧩 CEST Long: {cest_long_count}/{PARAM.get('MAX_CEST_BUY', 15)}\n"
+                   f"🧩 CEST Short: {cest_short_count}/{PARAM.get('MAX_CEST_SELL', 15)}\n"
+                   f"🕐 {now_local_iso()}")
+        
+        tg_send(msg)
+        log(f"[HOURLY MARGIN LOG] Sent. Profit: ${current_profit:.2f}, Remaining: ${remaining:.2f}, Est: {estimated_hours:.1f}h" if estimated_hours else f"[HOURLY MARGIN LOG] Sent. Profit: ${current_profit:.2f}, Remaining: ${remaining:.2f}")
+        
+    except Exception as e:
+        log(f"[HOURLY MARGIN LOG ERR] {e}")
 
 def heartbeat_and_status_check(_snapshot):
     now=time.time()
@@ -2560,6 +2727,9 @@ def main():
             
             # 3.2) Check profit target (cash out feature)
             check_profit_target()
+            
+            # 3.3) Send hourly margin progress log
+            send_hourly_margin_log()
 
             # 4) 4 saatlik auto-backup
             auto_report_if_due()
