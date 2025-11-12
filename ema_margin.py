@@ -2074,12 +2074,29 @@ def send_hourly_margin_log():
         # Get unrealized PnL
         unrealized_pnl = get_unrealized_pnl()
         
-        # Get open positions count
+        # Get open positions count and CEST positions
         try:
             acc = _signed_request("GET", "/fapi/v2/positionRisk", {"timestamp": now_ts_ms()})
-            open_positions = sum(1 for p in acc if float(p["positionAmt"]) != 0)
+            open_positions = 0
+            cest_long_count = 0
+            cest_short_count = 0
+            
+            for p in acc:
+                amt = float(p["positionAmt"])
+                if amt != 0:
+                    open_positions += 1
+                    sym = p["symbol"]
+                    
+                    # Check if this is a CEST position
+                    if sym in REAL_POSITIONS_TRACKER and REAL_POSITIONS_TRACKER[sym].get("kind") == "CEST":
+                        if amt > 0:
+                            cest_long_count += 1
+                        else:
+                            cest_short_count += 1
         except:
             open_positions = 0
+            cest_long_count = 0
+            cest_short_count = 0
         
         # Calculate estimated hours to target based on recent profit rate
         estimated_hours = None
@@ -2113,6 +2130,8 @@ def send_hourly_margin_log():
             "progress_pct": progress_pct,
             "unrealized_pnl": unrealized_pnl,
             "open_positions": open_positions,
+            "cest_long_count": cest_long_count,
+            "cest_short_count": cest_short_count,
             "profit_per_hour": profit_per_hour,
             "estimated_hours_to_target": estimated_hours
         }
@@ -2134,7 +2153,9 @@ def send_hourly_margin_log():
                    f"📊 Remaining: ${remaining:.2f}\n"
                    f"📈 Progress: {progress_pct:.1f}%\n"
                    f"💵 Unrealized PnL: ${unrealized_pnl:.2f}\n"
-                   f"📌 Open Positions: {open_positions}")
+                   f"📌 Open Positions: {open_positions}\n"
+                   f"🧩 CEST Long: {cest_long_count}/{PARAM.get('MAX_CEST_BUY', 15)}\n"
+                   f"🧩 CEST Short: {cest_short_count}/{PARAM.get('MAX_CEST_SELL', 15)}")
             
             # Add estimated time to target if available
             if estimated_hours is not None:
@@ -2155,6 +2176,8 @@ def send_hourly_margin_log():
                    f"📊 Excess: ${-remaining:.2f}\n"
                    f"💵 Unrealized PnL: ${unrealized_pnl:.2f}\n"
                    f"📌 Open Positions: {open_positions}\n"
+                   f"🧩 CEST Long: {cest_long_count}/{PARAM.get('MAX_CEST_BUY', 15)}\n"
+                   f"🧩 CEST Short: {cest_short_count}/{PARAM.get('MAX_CEST_SELL', 15)}\n"
                    f"🕐 {now_local_iso()}")
         
         tg_send(msg)
