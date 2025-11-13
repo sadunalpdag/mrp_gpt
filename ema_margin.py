@@ -34,8 +34,6 @@ AI_SIGNALS_FILE  = os.path.join(DATA_DIR,"ai_signals.json")
 AI_ANALYSIS_FILE = os.path.join(DATA_DIR,"ai_analysis.json")
 AI_RL_FILE       = os.path.join(DATA_DIR,"ai_rl_log.json")
 REAL_CLOSED_FILE = os.path.join(DATA_DIR,"real_closed.json")
-SIM_POS_FILE     = os.path.join(DATA_DIR,"sim_positions.json")
-SIM_CLOSED_FILE  = os.path.join(DATA_DIR,"sim_closed.json")
 LOG_FILE         = os.path.join(DATA_DIR,"log.txt")
 BALANCE_HISTORY_FILE = os.path.join(DATA_DIR,"balance_history.json")
 
@@ -50,7 +48,6 @@ PRECISION_CACHE = {}
 TREND_LOCK = {}
 TREND_LOCK_TIME = {}
 TRENDLOCK_EXPIRY_SEC = 6 * 3600
-SIM_QUEUE = []
 REAL_POSITIONS_TRACKER = {}  # Track open positions with strategy info
 LAST_REAL_CLOSE_CHECK = 0  # Timestamp of last real close check
 getcontext().prec = 28
@@ -1473,8 +1470,6 @@ AI_SIGNALS    = safe_load(AI_SIGNALS_FILE,[])
 AI_ANALYSIS   = safe_load(AI_ANALYSIS_FILE,[])
 AI_RL         = safe_load(AI_RL_FILE,[])
 REAL_CLOSED   = safe_load(REAL_CLOSED_FILE,[])
-SIM_POSITIONS = safe_load(SIM_POS_FILE,[])
-SIM_CLOSED    = safe_load(SIM_CLOSED_FILE,[])
 BALANCE_HISTORY = safe_load(BALANCE_HISTORY_FILE,[])
 
 def enrich_with_ai_context(pos):
@@ -1490,34 +1485,7 @@ def enrich_with_ai_context(pos):
             if k in best: pos[k]=best.get(k)
     return pos
 
-def queue_sim_variants(sig):
-    delays=[(30*60,"approve_30m",30),(60*60,"approve_1h",60),(90*60,"approve_1h30",90),(120*60,"approve_2h",120)]
-    now_s=now_ts_s()
-    for secs,label,mins in delays:
-        SIM_QUEUE.append({
-            "symbol":sig["symbol"],"dir":sig["dir"],"tier":sig["tier"],
-            "entry":sig["entry"],"tp":sig["tp"],"sl":sig["sl"],"power":sig["power"],
-            "created_ts":now_s,"open_after_ts":now_s+secs,
-            "approve_delay_min":mins,"approve_label":label,
-            "status":"PENDING","early":bool(sig.get("early",False)),
-            "kind":sig.get("kind",""),"tag":sig.get("tag",""),
-            "market_state":sig.get("market_state","")
-        })
-    safe_save(SIM_POS_FILE,SIM_QUEUE)
 
-def process_sim_queue_and_open_due():
-    global SIM_POSITIONS
-    now_s=now_ts_s()
-    remain=[]; opened=False
-    for q in SIM_QUEUE:
-        if q["open_after_ts"]<=now_s:
-            SIM_POSITIONS.append({**q,"status":"OPEN","open_ts":now_s,"open_time":now_local_iso()})
-            opened=True
-            log(f"[SIM OPEN] {q['symbol']} {q['dir']} approve={q['approve_delay_min']}m kind={q.get('kind')}")
-        else:
-            remain.append(q)
-    SIM_QUEUE[:] = remain
-    if opened: safe_save(SIM_POS_FILE,SIM_POSITIONS)
 
 def _unlock_trend_for(sym, delay_unlock=False):
     if delay_unlock:
@@ -1527,41 +1495,7 @@ def _unlock_trend_for(sym, delay_unlock=False):
     TREND_LOCK.pop(sym,None); TREND_LOCK_TIME.pop(sym,None)
     log(f"[TRENDLOCK CLEAR] {sym}")
 
-def process_sim_closes():
-    global SIM_POSITIONS
-    if not SIM_POSITIONS: return
-    still=[]; changed=False
-    for pos in SIM_POSITIONS:
-        if pos.get("status")!="OPEN": 
-            still.append(pos); 
-            continue
-        last=futures_get_price(pos["symbol"])
-        if last is None:
-            still.append(pos); continue
-        hit=None
-        if pos["dir"]=="UP":
-            if last>=pos["tp"]: hit="TP"
-            elif last<=pos["sl"]: hit="SL"
-        else:
-            if last<=pos["tp"]: hit="TP"
-            elif last>=pos["sl"]: hit="SL"
-        if hit:
-            close_time=now_local_iso()
-            gain_pct=((last/pos["entry"]-1.0)*100.0 if pos["dir"]=="UP" else (pos["entry"]/last-1.0)*100.0)
-            SIM_CLOSED.append({
-                **enrich_with_ai_context(dict(pos)),
-                "status":"CLOSED","close_time":close_time,
-                "exit_price":last,"exit_reason":hit,"gain_pct":gain_pct
-            })
-            _unlock_trend_for(pos["symbol"], delay_unlock=True)
-            changed=True
-            log(f"[SIM CLOSE] {pos['symbol']} {pos['dir']} {hit} {gain_pct:.3f}% approve={pos.get('approve_delay_min')}m kind={pos.get('kind')}")
-        else:
-            still.append(pos)
-    SIM_POSITIONS=still
-    if changed:
-        safe_save(SIM_POS_FILE,SIM_POSITIONS)
-        safe_save(SIM_CLOSED_FILE,SIM_CLOSED)
+
 
 def check_and_log_real_closed_trades():
     """
@@ -2211,9 +2145,7 @@ def heartbeat_and_status_check(_snapshot):
          f"long_blocked:{STATE.get('long_blocked')} "
          f"short_blocked:{STATE.get('short_blocked')} "
          f"cest_long_blocked:{STATE.get('cest_long_blocked')} "
-         f"cest_short_blocked:{STATE.get('cest_short_blocked')} "
-         f"sim_open:{len([p for p in SIM_POSITIONS if p.get('status')=='OPEN'])} "
-         f"sim_closed:{len(SIM_CLOSED)}")
+         f"cest_short_blocked:{STATE.get('cest_short_blocked')}")
     tg_send(msg); log(msg)
 
 def ai_log_signal(sig):
@@ -2245,9 +2177,7 @@ def ai_update_analysis_snapshot():
         "ny_reversal_signals_total": sum(1 for x in AI_SIGNALS if x.get("kind")=="NY_REVERSAL"),
         "ict_p3_signals_total": sum(1 for x in AI_SIGNALS if x.get("kind")=="ICT_POWER_OF_3"),
         "asian_bo_signals_total": sum(1 for x in AI_SIGNALS if x.get("kind")=="ASIAN_RANGE_BREAKOUT"),
-        "fvg_breaker_signals_total": sum(1 for x in AI_SIGNALS if x.get("kind")=="FVG_BREAKER_BLOCK"),
-        "sim_open_count":len([p for p in SIM_POSITIONS if p.get("status")=="OPEN"]),
-        "sim_closed_count":len(SIM_CLOSED)
+        "fvg_breaker_signals_total": sum(1 for x in AI_SIGNALS if x.get("kind")=="FVG_BREAKER_BLOCK")
     }
     AI_ANALYSIS.append(snapshot); safe_save(AI_ANALYSIS_FILE,AI_ANALYSIS)
 
@@ -2256,7 +2186,7 @@ def auto_report_if_due():
     if now_now-STATE.get("last_report",0) < 14400:
         return
     ai_update_analysis_snapshot()
-    for fpath in [AI_SIGNALS_FILE,AI_ANALYSIS_FILE,AI_RL_FILE,REAL_CLOSED_FILE,SIM_POS_FILE,SIM_CLOSED_FILE,PARAM_FILE,STATE_FILE]:
+    for fpath in [AI_SIGNALS_FILE,AI_ANALYSIS_FILE,AI_RL_FILE,REAL_CLOSED_FILE,PARAM_FILE,STATE_FILE]:
         try:
             if os.path.exists(fpath) and os.path.getsize(fpath)>20*1024*1024:
                 with open(fpath,"r",encoding="utf-8") as f: raw=f.read()
@@ -2289,9 +2219,7 @@ def _cmd_status():
         f"auto:{'✅' if STATE.get('auto_trade_active',True) else '🟥'} "
         f"long:{live.get('long_count',0)}/{PARAM.get('MAX_BUY',30)} short:{live.get('short_count',0)}/{PARAM.get('MAX_SELL',30)} "
         f"cest_long:{live.get('cest_long_count',0)}/{PARAM.get('MAX_CEST_BUY',15)} cest_short:{live.get('cest_short_count',0)}/{PARAM.get('MAX_CEST_SELL',15)} "
-        f"real_closed:{len(REAL_CLOSED)} "
-        f"sim_open:{len([p for p in SIM_POSITIONS if p.get('status')=='OPEN'])} "
-        f"sim_closed:{len(SIM_CLOSED)}"
+        f"real_closed:{len(REAL_CLOSED)}"
     )
 
 def _cmd_report():
@@ -2300,8 +2228,6 @@ def _cmd_report():
     tg_send_file(AI_ANALYSIS_FILE,"📄 ai_analysis.json")
     tg_send_file(AI_RL_FILE,"📄 ai_rl_log.json")
     tg_send_file(REAL_CLOSED_FILE,"📄 real_closed.json")
-    tg_send_file(SIM_POS_FILE,"📄 sim_positions.json")
-    tg_send_file(SIM_CLOSED_FILE,"📄 sim_closed.json")
 
 def _cmd_set(args):
     try:
@@ -2321,7 +2247,7 @@ def _cmd_set(args):
         tg_send(f"❌ /set hata: {e}")
 
 def _cmd_export():
-    for fpath in [PARAM_FILE,STATE_FILE,AI_SIGNALS_FILE,AI_ANALYSIS_FILE,AI_RL_FILE,REAL_CLOSED_FILE,SIM_POS_FILE,SIM_CLOSED_FILE,LOG_FILE]:
+    for fpath in [PARAM_FILE,STATE_FILE,AI_SIGNALS_FILE,AI_ANALYSIS_FILE,AI_RL_FILE,REAL_CLOSED_FILE,LOG_FILE]:
         tg_send_file(fpath, f"📦 {os.path.basename(fpath)}")
 
 def _cmd_balance():
@@ -2709,18 +2635,13 @@ def main():
             # 1) Sinyal tarama
             sigs=run_parallel(symbols,bar_i)
 
-            # 2) Sinyal kayıt + SIM approve + Gerçek trade
+            # 2) Sinyal kayıt + Gerçek trade
             for sig in sigs:
                 ai_log_signal(sig)
-                queue_sim_variants(sig)
                 update_directional_limits()
                 
                 # Execute real trade for all strategies (including KIVANC_CONFIRM)
                 execute_real_trade(sig)
-
-            # 3) SIM open/close
-            process_sim_queue_and_open_due()
-            process_sim_closes()
             
             # 3.1) Check and log real closed trades
             check_and_log_real_closed_trades()

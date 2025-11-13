@@ -40,3 +40,7 @@ Thumbs.db
 data/*.json
 data/*.txt
 *.log
+
+# Simulation files (not used)
+data/sim_positions.json
+data/sim_closed.json
