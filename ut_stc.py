@@ -17,6 +17,9 @@ USE_TREND_FILTER = True     # 4H trend filtresi (EMA'ya göre)
 TREND_EMA_LEN = 50          # 4H EMA periyodu
 MAX_SYMBOLS = None          # None = tüm USDT perpetual; sayı verirsen o kadarını alır (hacme göre sıralayıp)
 REQUEST_SLEEP = 0.15        # Her API çağrısı sonrası bekleme (rate limit için)
+USE_KILLZONE_FILTER = True  # Kill Zone filtresi (London/NY seansları)
+MAX_ZONE_USAGE = 2          # Aynı 4H bölgesi max kaç kere kullanılabilir
+MAX_ZONE_AGE_BARS = 15      # 5m barında, 4H bölgesi max kaç bar eski olabilir
 
 # ==========================
 # UTILS
@@ -128,6 +131,21 @@ def ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
 
+def is_killzone(dt):
+    """
+    Kill Zone kontrolü: London Open (08:00-10:00 UTC), NY Open (13:00-15:00 UTC), London Close (16:00-17:00 UTC)
+    UTC-5 referansı var, ama kodda UTC kullanıyoruz.
+    UTC bazlı kontrol yapıyoruz.
+    """
+    hour = dt.hour
+    # London Open: 08:00-10:00 UTC
+    # NY Open: 13:00-15:00 UTC
+    # London Close: 16:00-17:00 UTC
+    if (8 <= hour < 10) or (13 <= hour < 15) or (16 <= hour < 17):
+        return True
+    return False
+
+
 # ==========================
 # STRATEJİ BACKTEST
 # ==========================
@@ -199,6 +217,13 @@ def backtest_symbol(symbol, start_dt, end_dt):
     entry_time = None
 
     trades = []
+
+    # Zone tracking: Her 4H bölgesi için kullanım sayısı ve ilk kullanım barı
+    zone_usage = {}  # {h4_idx: {"count": int, "first_bar": int}}
+    
+    # Breakout tracking: Her 4H bölgesi için son breakout durumu
+    # {"h4_idx": last_h4_idx, "side": "above"/"below"/"inside", "bar_idx": i, "breakout_low": float, "breakout_high": float}
+    last_breakout = {"h4_idx": -1, "side": "inside", "bar_idx": -1, "breakout_low": None, "breakout_high": None}
 
     closes = df_5m["close"].values
     opens = df_5m["open"].values
@@ -289,16 +314,6 @@ def backtest_symbol(symbol, start_dt, end_dt):
             trend_ok_long = bool(h4_row["trend_up"])
             trend_ok_short = bool(h4_row["trend_down"])
 
-        # Aynı 4H bölgesinde miyiz? (breakout & re-entry için)
-        if h4_idx_curr != h4_idx_prev:
-            continue
-
-        prev_close = closes[i - 1]
-        curr_close = closes[i]
-
-        prev_strong = strongs[i - 1]
-        curr_strong = strongs[i]
-
         # Pozisyon ilişkisine göre konum
         def pos_rel(price):
             if price > h4_high:
@@ -308,22 +323,80 @@ def backtest_symbol(symbol, start_dt, end_dt):
             else:
                 return "inside"
 
+        prev_close = closes[i - 1]
+        curr_close = closes[i]
+        prev_high = highs[i - 1]
+        prev_low = lows[i - 1]
+
+        prev_strong = strongs[i - 1]
+        curr_strong = strongs[i]
+
         prev_rel = pos_rel(prev_close)
         curr_rel = pos_rel(curr_close)
 
-        # LONG setup: önce aşağıda kapanış, sonra içeri güçlü mum
+        # 4H bölgesi değişti mi? (yeni bölge)
+        if h4_idx_curr != h4_idx_prev:
+            # Yeni bölge başladı, breakout durumunu resetle
+            last_breakout = {"h4_idx": h4_idx_curr, "side": "inside", "bar_idx": i, "breakout_low": None, "breakout_high": None}
+
+        # Zone freshness check: Bölge çok eski veya çok kullanılmış mı?
+        if ref_idx not in zone_usage:
+            zone_usage[ref_idx] = {"count": 0, "first_bar": i}
+        
+        zone_info = zone_usage[ref_idx]
+        zone_age = i - zone_info["first_bar"]
+        
+        # Bölge çok eski (MAX_ZONE_AGE_BARS'dan fazla bar geçmiş) -> atla
+        if zone_age > MAX_ZONE_AGE_BARS:
+            continue
+        
+        # Bölge çok kullanılmış (MAX_ZONE_USAGE'dan fazla trade alınmış) -> atla
+        if zone_info["count"] >= MAX_ZONE_USAGE:
+            continue
+
+        # Kill Zone filtresi
+        if USE_KILLZONE_FILTER:
+            current_time = times[i]
+            if not is_killzone(current_time):
+                # Kill Zone dışında, işlem alma
+                continue
+
+        # Breakout tracking: Fiyat bölgeden dışarı çıktı mı güçlü bir mumla?
+        # LONG için: below'a çıkmalı (h4_low altına)
+        # SHORT için: above'a çıkmalı (h4_high üstüne)
+        
+        # Breakout durumunu güncelle (sadece güçlü mumlarla)
+        if last_breakout["h4_idx"] == h4_idx_curr:
+            # Aynı bölgedeyiz, breakout durumu güncel mi kontrol et
+            if prev_rel == "below" and prev_strong:
+                # Güçlü bir mumla alt bölgeden çıktık
+                last_breakout["side"] = "below"
+                last_breakout["bar_idx"] = i - 1
+                last_breakout["breakout_low"] = prev_low
+                last_breakout["breakout_high"] = prev_high
+            elif prev_rel == "above" and prev_strong:
+                # Güçlü bir mumla üst bölgeden çıktık
+                last_breakout["side"] = "above"
+                last_breakout["bar_idx"] = i - 1
+                last_breakout["breakout_low"] = prev_low
+                last_breakout["breakout_high"] = prev_high
+
+        # Re-entry kontrolü: Breakout olduktan sonra içeri dönüş
+        # LONG setup: Önce below'da breakout, sonra inside'a güçlü dönüş
         long_signal = (
-            prev_rel == "below" and
+            last_breakout["h4_idx"] == h4_idx_curr and
+            last_breakout["side"] == "below" and
             curr_rel == "inside" and
-            prev_strong and curr_strong and
+            curr_strong and
             trend_ok_long
         )
 
-        # SHORT setup: önce yukarıda kapanış, sonra içeri güçlü mum
+        # SHORT setup: Önce above'da breakout, sonra inside'a güçlü dönüş
         short_signal = (
-            prev_rel == "above" and
+            last_breakout["h4_idx"] == h4_idx_curr and
+            last_breakout["side"] == "above" and
             curr_rel == "inside" and
-            prev_strong and curr_strong and
+            curr_strong and
             trend_ok_short
         )
 
@@ -334,7 +407,8 @@ def backtest_symbol(symbol, start_dt, end_dt):
         entry = curr_close
 
         if long_signal:
-            stop = h4_low
+            # Stop: Breakout mumunun low'unun biraz altı
+            stop = last_breakout["breakout_low"] if last_breakout["breakout_low"] is not None else h4_low
             risk = entry - stop
             if risk <= 0:
                 continue
@@ -342,7 +416,8 @@ def backtest_symbol(symbol, start_dt, end_dt):
             pos_side = "long"
 
         elif short_signal:
-            stop = h4_high
+            # Stop: Breakout mumunun high'ının biraz üstü
+            stop = last_breakout["breakout_high"] if last_breakout["breakout_high"] is not None else h4_high
             risk = stop - entry
             if risk <= 0:
                 continue
@@ -351,6 +426,9 @@ def backtest_symbol(symbol, start_dt, end_dt):
 
         else:
             continue
+
+        # Zone usage'ı artır
+        zone_usage[ref_idx]["count"] += 1
 
         in_position = True
         entry_price = entry
