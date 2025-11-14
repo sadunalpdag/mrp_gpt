@@ -152,6 +152,11 @@ def backtest_symbol(symbol, start_dt, end_dt):
     if df_4h.empty:
         print(f"[{symbol}] 4H veri yok, atlanıyor.")
         return None
+    df_5m.index = df_5m.index.tz_convert("UTC")
+    df_5m["close_time"] = df_5m["close_time"].dt.tz_convert("UTC")
+
+    df_4h.index = df_4h.index.tz_convert("UTC")
+    df_4h["close_time"] = df_4h["close_time"].dt.tz_convert("UTC")
 
     # 4H EMA & trend
     df_4h["close_ema"] = ema(df_4h["close"], TREND_EMA_LEN)
