@@ -423,8 +423,8 @@ def backtest_symbol(symbol, start_dt, end_dt):
                 continue
             tp = entry - RR_TARGET * risk
             pos_side = "short"
-
         else:
+            # This should never be reached due to the check at line 403
             continue
 
         # Zone usage'ı artır
