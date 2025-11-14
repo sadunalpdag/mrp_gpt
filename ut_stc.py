@@ -195,7 +195,8 @@ def backtest_symbol(symbol, start_dt, end_dt):
     h4_i = 0
     num_h4 = len(df_4h)
 
-    for t_close in df_5m["close_time"].values:
+    for idx in range(len(df_5m)):
+        t_close = df_5m["close_time"].iloc[idx]
         # t_close zamanına kadar kapanmış son 4H mumu bul
         # (close_time <= t_close)
         while h4_i + 1 < num_h4 and df_4h["close_time"].iloc[h4_i + 1] <= t_close:
@@ -423,8 +424,8 @@ def backtest_symbol(symbol, start_dt, end_dt):
                 continue
             tp = entry - RR_TARGET * risk
             pos_side = "short"
-
         else:
+            # This should never be reached due to the check at line 403
             continue
 
         # Zone usage'ı artır
