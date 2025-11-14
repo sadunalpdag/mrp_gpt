@@ -24,6 +24,7 @@ def analyze_strategy_effectiveness(opened_trades, closed_trades):
     """
     Option 1: Analyze which strategy works best
     Based on the number of successful trades per strategy
+    (Excludes trades closed by profit target)
     """
     print("\n" + "="*70)
     print("OPTION 1: STRATEGY EFFECTIVENESS ANALYSIS")
@@ -35,9 +36,12 @@ def analyze_strategy_effectiveness(opened_trades, closed_trades):
         strategy = trade.get('kind', 'UNKNOWN')
         opened_by_strategy[strategy] += 1
     
-    # Count closed trades by strategy
+    # Count closed trades by strategy (excluding profit target closed)
     closed_by_strategy = Counter()
     for trade in closed_trades:
+        # Skip trades closed by profit target
+        if trade.get('closed_by_profit_target') == True:
+            continue
         strategy = trade.get('strategy', 'UNKNOWN')
         closed_by_strategy[strategy] += 1
     
@@ -87,6 +91,7 @@ def analyze_time_performance(opened_trades, closed_trades):
     """
     Option 2: Analyze which time periods have faster closing trades
     Shows average closure time and open/close ratio by half-hour intervals
+    (Excludes trades closed by profit target)
     """
     print("\n" + "="*70)
     print("OPTION 2: TIME PERIOD PERFORMANCE ANALYSIS")
@@ -104,8 +109,11 @@ def analyze_time_performance(opened_trades, closed_trades):
             if time_slot:
                 time_opened[time_slot] += 1
     
-    # Track closed trades by time slot
+    # Track closed trades by time slot (excluding profit target closed)
     for trade in closed_trades:
+        # Skip trades closed by profit target
+        if trade.get('closed_by_profit_target') == True:
+            continue
         open_time = parse_time(trade.get('open_time'))
         close_time = parse_time(trade.get('close_time'))
         
@@ -158,6 +166,7 @@ def analyze_strategy_time_performance(opened_trades, closed_trades):
     """
     Option 3: Analyze which strategy closes trades fastest by time period
     Shows average closure time, open/closed ratio by strategy and half-hour intervals
+    (Excludes trades closed by profit target)
     """
     print("\n" + "="*70)
     print("OPTION 3: STRATEGY-TIME PERFORMANCE ANALYSIS")
@@ -176,8 +185,11 @@ def analyze_strategy_time_performance(opened_trades, closed_trades):
             if time_slot:
                 strategy_time_opened[strategy][time_slot] += 1
     
-    # Track closed trades by strategy and time slot
+    # Track closed trades by strategy and time slot (excluding profit target closed)
     for trade in closed_trades:
+        # Skip trades closed by profit target
+        if trade.get('closed_by_profit_target') == True:
+            continue
         open_time = parse_time(trade.get('open_time'))
         close_time = parse_time(trade.get('close_time'))
         strategy = trade.get('strategy', 'UNKNOWN')
@@ -465,6 +477,7 @@ def analyze_power_based_performance(opened_trades, closed_trades):
     """
     Option 5: Analyze trades by power ranges with step increments
     Shows closing speed average, open/close ratio and strategy for trades in power ranges (e.g., 65-66)
+    (Excludes trades closed by profit target)
     """
     print("\n" + "="*70)
     print("OPTION 5: POWER-BASED PERFORMANCE ANALYSIS")
@@ -484,8 +497,11 @@ def analyze_power_based_performance(opened_trades, closed_trades):
             power_range = int(power)
             power_strategy_opened[power_range][strategy] += 1
     
-    # Track closed trades by power range and strategy
+    # Track closed trades by power range and strategy (excluding profit target closed)
     for trade in closed_trades:
+        # Skip trades closed by profit target
+        if trade.get('closed_by_profit_target') == True:
+            continue
         open_time = parse_time(trade.get('open_time'))
         close_time = parse_time(trade.get('close_time'))
         strategy = trade.get('strategy', 'UNKNOWN')
@@ -577,6 +593,127 @@ def analyze_power_based_performance(opened_trades, closed_trades):
     
     print("="*70)
 
+def analyze_profit_target_by_strategy(opened_trades, closed_trades):
+    """
+    Option 10: Analyze trades closed by profit target by strategy
+    Shows total opened vs profit target closed per strategy
+    """
+    print("\n" + "="*70)
+    print("OPTION 10: PROFIT TARGET CLOSED TRADES BY STRATEGY")
+    print("="*70)
+    
+    # Count opened trades by strategy
+    opened_by_strategy = Counter()
+    for trade in opened_trades:
+        strategy = trade.get('kind', 'UNKNOWN')
+        opened_by_strategy[strategy] += 1
+    
+    # Count profit target closed trades by strategy
+    profit_target_closed_by_strategy = Counter()
+    for trade in closed_trades:
+        if trade.get('closed_by_profit_target') == True:
+            strategy = trade.get('strategy', 'UNKNOWN')
+            profit_target_closed_by_strategy[strategy] += 1
+    
+    # Calculate statistics
+    print("\nProfit Target Closed Trades by Strategy:")
+    print(f"{'Strategy':<30} {'Opened':>10} {'PT Closed':>12} {'PT Closed %':>15}")
+    print("-" * 70)
+    
+    all_strategies = set(opened_by_strategy.keys()) | set(profit_target_closed_by_strategy.keys())
+    strategy_stats = []
+    
+    for strategy in sorted(all_strategies):
+        opened = opened_by_strategy[strategy]
+        pt_closed = profit_target_closed_by_strategy[strategy]
+        pt_closed_pct = (pt_closed / opened * 100) if opened > 0 else 0
+        strategy_stats.append((strategy, opened, pt_closed, pt_closed_pct))
+        print(f"{strategy:<30} {opened:>10} {pt_closed:>12} {pt_closed_pct:>14.2f}%")
+    
+    # Total summary
+    total_opened = sum(opened_by_strategy.values())
+    total_pt_closed = sum(profit_target_closed_by_strategy.values())
+    total_pt_pct = (total_pt_closed / total_opened * 100) if total_opened > 0 else 0
+    
+    print("\n" + "="*70)
+    print("TOTAL SUMMARY:")
+    print(f"  - Total Opened: {total_opened}")
+    print(f"  - Total Closed by Profit Target: {total_pt_closed}")
+    print(f"  - Percentage: {total_pt_pct:.2f}%")
+    
+    # Find strategy with highest PT close rate
+    if strategy_stats:
+        highest_pt = max(strategy_stats, key=lambda x: x[3])
+        print(f"\nHIGHEST PROFIT TARGET CLOSE RATE:")
+        print(f"  - Strategy: {highest_pt[0]}")
+        print(f"  - Opened: {highest_pt[1]}")
+        print(f"  - PT Closed: {highest_pt[2]} ({highest_pt[3]:.2f}%)")
+    print("="*70)
+
+def analyze_profit_target_by_time(opened_trades, closed_trades):
+    """
+    Option 11: Analyze trades closed by profit target by hour
+    Shows total opened vs profit target closed per half-hour time slot
+    """
+    print("\n" + "="*70)
+    print("OPTION 11: PROFIT TARGET CLOSED TRADES BY TIME PERIOD")
+    print("="*70)
+    
+    time_opened = defaultdict(int)
+    time_pt_closed = defaultdict(int)
+    
+    # Track opened trades by time slot
+    for trade in opened_trades:
+        open_time = parse_time(trade.get('time'))
+        if open_time:
+            time_slot = get_half_hour_slot(open_time)
+            if time_slot:
+                time_opened[time_slot] += 1
+    
+    # Track profit target closed trades by time slot
+    for trade in closed_trades:
+        if trade.get('closed_by_profit_target') == True:
+            open_time = parse_time(trade.get('open_time'))
+            if open_time:
+                time_slot = get_half_hour_slot(open_time)
+                if time_slot:
+                    time_pt_closed[time_slot] += 1
+    
+    # Calculate statistics
+    print("\nProfit Target Closed Trades by Time Period:")
+    print(f"{'Time Slot':<20} {'Opened':>10} {'PT Closed':>12} {'PT Closed %':>15}")
+    print("-" * 60)
+    
+    time_stats = []
+    all_time_slots = set(time_opened.keys()) | set(time_pt_closed.keys())
+    
+    for time_slot in sorted(all_time_slots):
+        opened = time_opened.get(time_slot, 0)
+        pt_closed = time_pt_closed.get(time_slot, 0)
+        pt_closed_pct = (pt_closed / opened * 100) if opened > 0 else 0
+        time_stats.append((time_slot, opened, pt_closed, pt_closed_pct))
+        print(f"{time_slot:<20} {opened:>10} {pt_closed:>12} {pt_closed_pct:>14.2f}%")
+    
+    # Total summary
+    total_opened = sum(time_opened.values())
+    total_pt_closed = sum(time_pt_closed.values())
+    total_pt_pct = (total_pt_closed / total_opened * 100) if total_opened > 0 else 0
+    
+    print("\n" + "="*70)
+    print("TOTAL SUMMARY:")
+    print(f"  - Total Opened: {total_opened}")
+    print(f"  - Total Closed by Profit Target: {total_pt_closed}")
+    print(f"  - Percentage: {total_pt_pct:.2f}%")
+    
+    # Find time slot with highest PT close rate
+    if time_stats:
+        highest_pt = max(time_stats, key=lambda x: x[3])
+        print(f"\nHIGHEST PROFIT TARGET CLOSE RATE:")
+        print(f"  - Time Slot: {highest_pt[0]}")
+        print(f"  - Opened: {highest_pt[1]}")
+        print(f"  - PT Closed: {highest_pt[2]} ({highest_pt[3]:.2f}%)")
+    print("="*70)
+
 def main():
     """Main function with menu system"""
     print("="*70)
@@ -600,19 +737,22 @@ def main():
         print("\n" + "="*70)
         print("SELECT ANALYSIS OPTION:")
         print("="*70)
-        print("1. Which strategy works best? (Most effective)")
-        print("2. Which time periods have faster closing trades?")
-        print("3. Which strategy closes fastest by time period? (with open/closed ratio)")
-        print("4. Run all analyses")
-        print("5. Power-based analysis (closing speed by power ranges)")
+        print("1. Which strategy works best? (Most effective) [Excludes PT closed]")
+        print("2. Which time periods have faster closing trades? [Excludes PT closed]")
+        print("3. Which strategy closes fastest by time period? [Excludes PT closed]")
+        print("4. Run all analyses (1-5) [Excludes PT closed]")
+        print("5. Power-based analysis (closing speed by power ranges) [Excludes PT closed]")
         print("6. Analyze currently open trades (hours open, power values)")
         print("7. Show total open transaction ratio")
         print("8. Analyze open trades by power ranges")
         print("9. Run all open trade analyses (6+7+8)")
+        print("10. Analyze profit target closed trades by strategy")
+        print("11. Analyze profit target closed trades by time period")
+        print("12. Run all profit target analyses (10+11)")
         print("0. Exit")
         print("="*70)
         
-        choice = input("\nEnter your choice (0-9): ").strip()
+        choice = input("\nEnter your choice (0-12): ").strip()
         
         if choice == '1':
             analyze_strategy_effectiveness(opened_trades, closed_trades)
@@ -637,11 +777,18 @@ def main():
             analyze_open_trades(opened_trades, closed_trades)
             analyze_open_transaction_ratio(opened_trades, closed_trades)
             analyze_open_trades_by_power(opened_trades, closed_trades)
+        elif choice == '10':
+            analyze_profit_target_by_strategy(opened_trades, closed_trades)
+        elif choice == '11':
+            analyze_profit_target_by_time(opened_trades, closed_trades)
+        elif choice == '12':
+            analyze_profit_target_by_strategy(opened_trades, closed_trades)
+            analyze_profit_target_by_time(opened_trades, closed_trades)
         elif choice == '0':
             print("\nExiting... Goodbye!")
             break
         else:
-            print("\nInvalid choice. Please select 0-9.")
+            print("\nInvalid choice. Please select 0-12.")
 
 if __name__ == '__main__':
     main()
