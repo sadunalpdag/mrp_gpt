@@ -444,9 +444,8 @@ def backtest_symbol(symbol, start_dt, end_dt):
             
             # Position size: $1.5 kar için kaç birim almalıyız?
             # PROFIT_TARGET = position_size * (tp_price - entry_price)
-            # TP fiyatını küçük bir hareketle ayarlayalım (örnek: %0.5 hareket)
-            # Daha gerçekçi olması için, minimum %0.2 hedef koyalım
-            min_price_move = entry * 0.002  # %0.2 minimum hareket
+            # TP fiyatını %0.6 hareketle ayarlayalım
+            min_price_move = entry * 0.006  # %0.6 hareket
             tp = entry + min_price_move
             pos_size = PROFIT_TARGET / (tp - entry)
             
@@ -457,7 +456,7 @@ def backtest_symbol(symbol, start_dt, end_dt):
             stop = last_breakout["breakout_high"] if last_breakout["breakout_high"] is not None else h4_high
             
             # Position size: $1.5 kar için kaç birim satmalıyız?
-            min_price_move = entry * 0.002  # %0.2 minimum hareket
+            min_price_move = entry * 0.006  # %0.6 hareket
             tp = entry - min_price_move
             pos_size = PROFIT_TARGET / (entry - tp)
             
@@ -561,4 +560,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
