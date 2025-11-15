@@ -294,6 +294,15 @@ def backtest_symbol(symbol, start_dt, end_dt):
                     "session": session_count,
                     "session_profit": session_profit,
                 })
+                
+                # Terminal'de trade detaylarını göster
+                trade_num = len(trades)
+                profit_sign = "+" if pnl_usd >= 0 else ""
+                print(f"  ├─ Trade #{trade_num} [{pos_side.upper()}] "
+                      f"Giriş: {entry_time.strftime('%Y-%m-%d %H:%M')} @ ${entry_price:.2f} → "
+                      f"Çıkış: {times[i].strftime('%Y-%m-%d %H:%M')} @ ${exit_price:.2f} | "
+                      f"PnL: {profit_sign}${pnl_usd:.2f} | "
+                      f"Session #{session_count}: ${session_profit:.2f}/${SESSION_PROFIT_TARGET:.2f}")
 
                 in_position = False
                 pos_side = None
@@ -303,6 +312,8 @@ def backtest_symbol(symbol, start_dt, end_dt):
                 
                 # Session hedefine ulaşıldı mı kontrol et
                 if session_profit >= SESSION_PROFIT_TARGET:
+                    print(f"  └─ ✓ SESSION #{session_count} TAMAMLANDI! Toplam Kar: ${session_profit:.2f}")
+                    print(f"     Yeni session başlıyor...\n")
                     # Yeni session başlat
                     session_count += 1
                     session_profit = 0.0
@@ -466,7 +477,7 @@ def backtest_symbol(symbol, start_dt, end_dt):
         entry_time = times[i]
 
     if not trades:
-        print(f"[{symbol}] Hiç trade çıkmadı.")
+        print(f"[{symbol}] Hiç trade çıkmadı.\n")
         return None
 
     # Sonuçları özetle
@@ -476,7 +487,9 @@ def backtest_symbol(symbol, start_dt, end_dt):
     avg_pnl = df_trades["pnl_usd"].mean()
     num_trades = len(df_trades)
 
-    print(f"[{symbol}] İşlem sayısı: {num_trades}, Win rate: {win_rate:.1f}%, Toplam PnL: ${total_pnl:.2f}, Ortalama PnL: ${avg_pnl:.2f}")
+    print(f"\n{'='*70}")
+    print(f"[{symbol}] ÖZET: {num_trades} işlem | Win: {win_rate:.1f}% | Toplam: ${total_pnl:.2f} | Ort: ${avg_pnl:.2f}")
+    print(f"{'='*70}\n")
 
     return df_trades
 
