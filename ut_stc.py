@@ -11,7 +11,10 @@ BINANCE_FAPI = "https://fapi.binance.com"
 # AYARLAR
 # ==========================
 DAYS_BACK = 90              # Kaç gün geriye gideceğiz
-RR_TARGET = 2.0             # Risk/Ödül oranı (TP = 2R)
+INITIAL_CAPITAL = 5000.0    # Başlangıç sermayesi (USD)
+PROFIT_TARGET = 1.5         # Her trade için kar hedefi (USD)
+SESSION_PROFIT_TARGET = 20.0  # Session kar hedefi - bu hedefe ulaşınca tüm pozisyonlar kapanır (USD)
+USE_STOP_LOSS = False       # Stop loss kullan (False = kullanma)
 BODY_THRESH = 0.6           # Güçlü mum gövde oranı (0-1)
 USE_TREND_FILTER = True     # 4H trend filtresi (EMA'ya göre)
 TREND_EMA_LEN = 50          # 4H EMA periyodu
@@ -215,9 +218,14 @@ def backtest_symbol(symbol, start_dt, end_dt):
     entry_price = None
     stop_price = None
     tp_price = None
+    position_size = None
     entry_time = None
 
     trades = []
+    
+    # Session tracking: Mevcut session'daki kümülatif kar
+    session_profit = 0.0
+    session_count = 0
 
     # Zone tracking: Her 4H bölgesi için kullanım sayısı ve ilk kullanım barı
     zone_usage = {}  # {h4_idx: {"count": int, "first_bar": int}}
@@ -235,7 +243,7 @@ def backtest_symbol(symbol, start_dt, end_dt):
     times = df_5m.index.to_list()
 
     for i in range(1, len(df_5m)):
-        # Pozisyon açık ise önce SL/TP kontrolü
+        # Pozisyon açık ise TP kontrolü
         if in_position:
             high_i = highs[i]
             low_i = lows[i]
@@ -243,32 +251,34 @@ def backtest_symbol(symbol, start_dt, end_dt):
             exit_price = None
 
             if pos_side == "long":
-                # Pessimistic: önce stop'a bak, sonra TP
-                if low_i <= stop_price:
-                    exit_price = stop_price
-                    exit_reason = "SL"
-                elif high_i >= tp_price:
+                # TP kontrolü: $1.5 kar hedefine ulaştı mı?
+                if high_i >= tp_price:
                     exit_price = tp_price
                     exit_reason = "TP"
+                # SL kontrolü (opsiyonel)
+                elif USE_STOP_LOSS and low_i <= stop_price:
+                    exit_price = stop_price
+                    exit_reason = "SL"
             else:  # short
-                if high_i >= stop_price:
-                    exit_price = stop_price
-                    exit_reason = "SL"
-                elif low_i <= tp_price:
+                # TP kontrolü: $1.5 kar hedefine ulaştı mı?
+                if low_i <= tp_price:
                     exit_price = tp_price
                     exit_reason = "TP"
+                # SL kontrolü (opsiyonel)
+                elif USE_STOP_LOSS and high_i >= stop_price:
+                    exit_price = stop_price
+                    exit_reason = "SL"
 
             if exit_reason is not None:
-                # R hesabı
+                # PnL hesabı (USD cinsinden)
                 if pos_side == "long":
-                    risk_per_unit = entry_price - stop_price
-                    pnl_per_unit = exit_price - entry_price
+                    pnl_usd = (exit_price - entry_price) * position_size
                 else:
-                    risk_per_unit = stop_price - entry_price
-                    pnl_per_unit = entry_price - exit_price
+                    pnl_usd = (entry_price - exit_price) * position_size
 
-                R = pnl_per_unit / risk_per_unit if risk_per_unit != 0 else 0.0
-
+                # Session profit'e ekle
+                session_profit += pnl_usd
+                
                 trades.append({
                     "symbol": symbol,
                     "side": pos_side,
@@ -278,14 +288,24 @@ def backtest_symbol(symbol, start_dt, end_dt):
                     "exit": exit_price,
                     "stop": stop_price,
                     "tp": tp_price,
-                    "R": R,
+                    "pnl_usd": pnl_usd,
+                    "position_size": position_size,
                     "reason": exit_reason,
+                    "session": session_count,
+                    "session_profit": session_profit,
                 })
 
                 in_position = False
                 pos_side = None
                 entry_price = stop_price = tp_price = None
+                position_size = None
                 entry_time = None
+                
+                # Session hedefine ulaşıldı mı kontrol et
+                if session_profit >= SESSION_PROFIT_TARGET:
+                    # Yeni session başlat
+                    session_count += 1
+                    session_profit = 0.0
 
             # SL/TP olduktan sonra aynı bar’da yeni trade aramayalım
             # (istersen burada continue koyabilirsin)
@@ -408,24 +428,31 @@ def backtest_symbol(symbol, start_dt, end_dt):
         entry = curr_close
 
         if long_signal:
-            # Stop: Breakout mumunun low'unun biraz altı
+            # Stop: Breakout mumunun low'unun biraz altı (sadece referans için)
             stop = last_breakout["breakout_low"] if last_breakout["breakout_low"] is not None else h4_low
-            risk = entry - stop
-            if risk <= 0:
-                continue
-            tp = entry + RR_TARGET * risk
+            
+            # Position size: $1.5 kar için kaç birim almalıyız?
+            # PROFIT_TARGET = position_size * (tp_price - entry_price)
+            # TP fiyatını küçük bir hareketle ayarlayalım (örnek: %0.5 hareket)
+            # Daha gerçekçi olması için, minimum %0.2 hedef koyalım
+            min_price_move = entry * 0.002  # %0.2 minimum hareket
+            tp = entry + min_price_move
+            pos_size = PROFIT_TARGET / (tp - entry)
+            
             pos_side = "long"
 
         elif short_signal:
-            # Stop: Breakout mumunun high'ının biraz üstü
+            # Stop: Breakout mumunun high'ının biraz üstü (sadece referans için)
             stop = last_breakout["breakout_high"] if last_breakout["breakout_high"] is not None else h4_high
-            risk = stop - entry
-            if risk <= 0:
-                continue
-            tp = entry - RR_TARGET * risk
+            
+            # Position size: $1.5 kar için kaç birim satmalıyız?
+            min_price_move = entry * 0.002  # %0.2 minimum hareket
+            tp = entry - min_price_move
+            pos_size = PROFIT_TARGET / (entry - tp)
+            
             pos_side = "short"
         else:
-            # This should never be reached due to the check at line 403
+            # This should never be reached due to the check at line 407
             continue
 
         # Zone usage'ı artır
@@ -435,6 +462,7 @@ def backtest_symbol(symbol, start_dt, end_dt):
         entry_price = entry
         stop_price = stop
         tp_price = tp
+        position_size = pos_size
         entry_time = times[i]
 
     if not trades:
@@ -443,12 +471,12 @@ def backtest_symbol(symbol, start_dt, end_dt):
 
     # Sonuçları özetle
     df_trades = pd.DataFrame(trades)
-    total_R = df_trades["R"].sum()
-    win_rate = (df_trades["R"] > 0).mean() * 100
-    avg_R = df_trades["R"].mean()
+    total_pnl = df_trades["pnl_usd"].sum()
+    win_rate = (df_trades["pnl_usd"] > 0).mean() * 100
+    avg_pnl = df_trades["pnl_usd"].mean()
     num_trades = len(df_trades)
 
-    print(f"[{symbol}] İşlem sayısı: {num_trades}, Win rate: {win_rate:.1f}%, Toplam R: {total_R:.2f}, Ortalama R: {avg_R:.2f}")
+    print(f"[{symbol}] İşlem sayısı: {num_trades}, Win rate: {win_rate:.1f}%, Toplam PnL: ${total_pnl:.2f}, Ortalama PnL: ${avg_pnl:.2f}")
 
     return df_trades
 
@@ -476,21 +504,43 @@ def main():
         return
 
     df_all = pd.concat(all_trades, ignore_index=True)
+    
+    # Tarihe göre sırala (kronolojik sermaye takibi için)
+    df_all = df_all.sort_values('entry_time').reset_index(drop=True)
 
     # Genel özet
-    total_R = df_all["R"].sum()
-    win_rate = (df_all["R"] > 0).mean() * 100
-    avg_R = df_all["R"].mean()
+    total_pnl = df_all["pnl_usd"].sum()
+    win_rate = (df_all["pnl_usd"] > 0).mean() * 100
+    avg_pnl = df_all["pnl_usd"].mean()
     num_trades = len(df_all)
+    
+    # Session bilgileri
+    num_sessions = df_all["session"].max() + 1 if "session" in df_all.columns else 0
+    completed_sessions = int(total_pnl / SESSION_PROFIT_TARGET)  # Tamamlanan session sayısı
+    
+    # Sermaye takibi - Session bazlı
+    # Her session $20 kar eklediğinde sermaye artar
+    df_all['cumulative_pnl'] = df_all['pnl_usd'].cumsum()
+    df_all['capital'] = INITIAL_CAPITAL + df_all['cumulative_pnl']
+    
+    final_capital = df_all['capital'].iloc[-1]
+    total_return_pct = ((final_capital - INITIAL_CAPITAL) / INITIAL_CAPITAL) * 100
 
     print("\n==================== GENEL ÖZET ====================")
+    print(f"Başlangıç Sermayesi: ${INITIAL_CAPITAL:.2f}")
+    print(f"Session Hedefi: ${SESSION_PROFIT_TARGET:.2f} (Her trade: ${PROFIT_TARGET:.2f})")
+    print(f"Tamamlanan Session: {completed_sessions}")
     print(f"Toplam işlem: {num_trades}")
     print(f"Genel Win rate: {win_rate:.1f}%")
-    print(f"Toplam R: {total_R:.2f}")
-    print(f"Ortalama R: {avg_R:.2f}")
+    print(f"Toplam PnL: ${total_pnl:.2f}")
+    print(f"Ortalama PnL: ${avg_pnl:.2f}")
+    print(f"\n{'='*50}")
+    print(f"SONUÇ: Final Sermaye = ${final_capital:.2f}")
+    print(f"Toplam Getiri: {total_return_pct:+.2f}%")
+    print(f"{'='*50}")
 
     # Sembol bazlı özet
-    sym_group = df_all.groupby("symbol")["R"].agg(["count", "sum", "mean"])
+    sym_group = df_all.groupby("symbol")["pnl_usd"].agg(["count", "sum", "mean"])
     sym_group = sym_group.sort_values("sum", ascending=False)
     print("\nSembol bazlı performans (ilk 30):")
     print(sym_group.head(30))
