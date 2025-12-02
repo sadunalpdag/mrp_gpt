@@ -5,7 +5,7 @@ Analyzes ai_rl_log.json (opened trades) and real_closed.json (closed trades)
 to provide insights about strategy effectiveness and timing.
 """
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict, Counter
 
 def load_json_data(filepath):
@@ -1046,7 +1046,10 @@ def analyze_closed_trades_parameters(opened_trades, closed_trades):
     for trade in valid_closed:
         power = trade.get('power')
         if power is not None:
-            power_range = int(power)
+            try:
+                power_range = int(float(power))
+            except (ValueError, TypeError):
+                continue
             exit_reason = trade.get('exit_reason', '')
             
             open_time = parse_time(trade.get('open_time'))
@@ -1211,7 +1214,6 @@ def filter_open_trades_by_options(opened_trades, closed_trades):
     print("="*70)
     
     # Get current time with UTC timezone
-    from datetime import timezone
     current_time = datetime.now(timezone.utc)
     
     # Find trades that are still open
