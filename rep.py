@@ -714,6 +714,434 @@ def analyze_profit_target_by_time(opened_trades, closed_trades):
         print(f"  - PT Closed: {highest_pt[2]} ({highest_pt[3]:.2f}%)")
     print("="*70)
 
+def get_day_of_week(dt):
+    """Get day of week name from datetime"""
+    if dt is None:
+        return None
+    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    return days[dt.weekday()]
+
+def analyze_worst_performing_days(opened_trades, closed_trades):
+    """
+    Option 13: Analyze which days of the week have the worst results
+    Shows success rate and average closing duration by day
+    Lower success rate = worse performance
+    """
+    print("\n" + "="*70)
+    print("OPTION 13: WORST PERFORMING DAYS ANALYSIS")
+    print("="*70)
+    
+    day_opened = defaultdict(int)
+    day_closed = defaultdict(int)
+    day_durations = defaultdict(list)
+    day_still_open = defaultdict(int)
+    
+    # Track opened trades by day
+    for trade in opened_trades:
+        open_time = parse_time(trade.get('time'))
+        if open_time:
+            day = get_day_of_week(open_time)
+            if day:
+                day_opened[day] += 1
+    
+    # Track closed trades by day (excluding profit target closed)
+    closed_symbols_times = set()
+    for trade in closed_trades:
+        symbol = trade.get('symbol')
+        open_time_str = trade.get('open_time')
+        if symbol and open_time_str:
+            closed_symbols_times.add((symbol, open_time_str))
+        
+        if trade.get('closed_by_profit_target') == True:
+            continue
+        open_time = parse_time(trade.get('open_time'))
+        close_time = parse_time(trade.get('close_time'))
+        
+        if open_time and close_time:
+            day = get_day_of_week(open_time)
+            if day:
+                day_closed[day] += 1
+                duration = (close_time - open_time).total_seconds() / 60  # in minutes
+                day_durations[day].append(duration)
+    
+    # Count still open trades by day
+    for trade in opened_trades:
+        symbol = trade.get('symbol')
+        time = trade.get('time')
+        if symbol and time:
+            if (symbol, time) not in closed_symbols_times:
+                open_time = parse_time(time)
+                if open_time:
+                    day = get_day_of_week(open_time)
+                    if day:
+                        day_still_open[day] += 1
+    
+    # Calculate statistics
+    print("\nDay Performance (Sorted by Success Rate - Worst First):")
+    print(f"{'Day':<12} {'Opened':>10} {'Closed':>10} {'Still Open':>12} {'Success Rate':>15} {'Avg Duration':>18}")
+    print("-" * 85)
+    
+    day_stats = []
+    days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    
+    for day in days_order:
+        if day_opened[day] > 0 or day_closed[day] > 0:
+            opened = day_opened[day]
+            closed = day_closed[day]
+            still_open = day_still_open[day]
+            success_rate = (closed / opened * 100) if opened > 0 else 0
+            avg_duration = (sum(day_durations[day]) / len(day_durations[day])) if day_durations[day] else 0
+            day_stats.append((day, opened, closed, still_open, success_rate, avg_duration))
+    
+    # Sort by success rate ascending (worst first)
+    day_stats.sort(key=lambda x: x[4])
+    
+    for stat in day_stats:
+        day, opened, closed, still_open, success_rate, avg_duration = stat
+        duration_str = f"{avg_duration:.2f} min" if avg_duration > 0 else "N/A"
+        print(f"{day:<12} {opened:>10} {closed:>10} {still_open:>12} {success_rate:>14.2f}% {duration_str:>18}")
+    
+    # Summary
+    if day_stats:
+        worst_day = day_stats[0]
+        best_day = day_stats[-1]
+        print("\n" + "="*70)
+        print("WORST PERFORMING DAY (Consider Canceling):")
+        print(f"  - Day: {worst_day[0]}")
+        print(f"  - Opened: {worst_day[1]} trades")
+        print(f"  - Closed: {worst_day[2]} trades")
+        print(f"  - Still Open: {worst_day[3]} trades")
+        print(f"  - Success Rate: {worst_day[4]:.2f}%")
+        if worst_day[5] > 0:
+            print(f"  - Avg Duration: {worst_day[5]:.2f} min ({worst_day[5]/60:.2f} hrs)")
+        
+        print(f"\nBEST PERFORMING DAY:")
+        print(f"  - Day: {best_day[0]}")
+        print(f"  - Success Rate: {best_day[4]:.2f}%")
+        print("="*70)
+
+def analyze_worst_performing_strategies(opened_trades, closed_trades):
+    """
+    Option 14: Analyze which strategies have the worst results
+    Shows success rate and average closing duration by strategy
+    Lower success rate = worse performance
+    """
+    print("\n" + "="*70)
+    print("OPTION 14: WORST PERFORMING STRATEGIES ANALYSIS")
+    print("="*70)
+    
+    strategy_opened = Counter()
+    strategy_closed = Counter()
+    strategy_durations = defaultdict(list)
+    strategy_still_open = Counter()
+    
+    # Track opened trades by strategy
+    for trade in opened_trades:
+        strategy = trade.get('kind', 'UNKNOWN')
+        strategy_opened[strategy] += 1
+    
+    # Track closed trades by strategy (excluding profit target closed)
+    closed_symbols_times = set()
+    for trade in closed_trades:
+        symbol = trade.get('symbol')
+        open_time_str = trade.get('open_time')
+        if symbol and open_time_str:
+            closed_symbols_times.add((symbol, open_time_str))
+        
+        if trade.get('closed_by_profit_target') == True:
+            continue
+        open_time = parse_time(trade.get('open_time'))
+        close_time = parse_time(trade.get('close_time'))
+        strategy = trade.get('strategy', 'UNKNOWN')
+        
+        if open_time and close_time:
+            strategy_closed[strategy] += 1
+            duration = (close_time - open_time).total_seconds() / 60  # in minutes
+            strategy_durations[strategy].append(duration)
+    
+    # Count still open trades by strategy
+    for trade in opened_trades:
+        symbol = trade.get('symbol')
+        time = trade.get('time')
+        if symbol and time:
+            if (symbol, time) not in closed_symbols_times:
+                strategy = trade.get('kind', 'UNKNOWN')
+                strategy_still_open[strategy] += 1
+    
+    # Calculate statistics
+    print("\nStrategy Performance (Sorted by Success Rate - Worst First):")
+    print(f"{'Strategy':<25} {'Opened':>10} {'Closed':>10} {'Still Open':>12} {'Success Rate':>15} {'Avg Duration':>18}")
+    print("-" * 100)
+    
+    all_strategies = set(strategy_opened.keys()) | set(strategy_closed.keys())
+    strategy_stats = []
+    
+    for strategy in all_strategies:
+        opened = strategy_opened[strategy]
+        closed = strategy_closed[strategy]
+        still_open = strategy_still_open[strategy]
+        success_rate = (closed / opened * 100) if opened > 0 else 0
+        avg_duration = (sum(strategy_durations[strategy]) / len(strategy_durations[strategy])) if strategy_durations[strategy] else 0
+        strategy_stats.append((strategy, opened, closed, still_open, success_rate, avg_duration))
+    
+    # Sort by success rate ascending (worst first)
+    strategy_stats.sort(key=lambda x: x[4])
+    
+    for stat in strategy_stats:
+        strategy, opened, closed, still_open, success_rate, avg_duration = stat
+        duration_str = f"{avg_duration:.2f} min" if avg_duration > 0 else "N/A"
+        print(f"{strategy:<25} {opened:>10} {closed:>10} {still_open:>12} {success_rate:>14.2f}% {duration_str:>18}")
+    
+    # Summary
+    if strategy_stats:
+        worst_strategies = [s for s in strategy_stats if s[1] >= 10]  # At least 10 trades
+        if worst_strategies:
+            worst_strategy = worst_strategies[0]
+            print("\n" + "="*70)
+            print("WORST PERFORMING STRATEGY (Consider Canceling - min 10 trades):")
+            print(f"  - Strategy: {worst_strategy[0]}")
+            print(f"  - Opened: {worst_strategy[1]} trades")
+            print(f"  - Closed: {worst_strategy[2]} trades")
+            print(f"  - Still Open: {worst_strategy[3]} trades")
+            print(f"  - Success Rate: {worst_strategy[4]:.2f}%")
+            if worst_strategy[5] > 0:
+                print(f"  - Avg Duration: {worst_strategy[5]:.2f} min ({worst_strategy[5]/60:.2f} hrs)")
+        
+        best_strategies = sorted(strategy_stats, key=lambda x: x[4], reverse=True)
+        best_strategies = [s for s in best_strategies if s[1] >= 10]
+        if best_strategies:
+            best_strategy = best_strategies[0]
+            print(f"\nBEST PERFORMING STRATEGY (min 10 trades):")
+            print(f"  - Strategy: {best_strategy[0]}")
+            print(f"  - Success Rate: {best_strategy[4]:.2f}%")
+        print("="*70)
+
+def analyze_worst_performing_timeframes(opened_trades, closed_trades):
+    """
+    Option 15: Analyze which half-hour timeframes have the worst results
+    Shows success rate and average closing duration by timeframe
+    Lower success rate = worse performance
+    """
+    print("\n" + "="*70)
+    print("OPTION 15: WORST PERFORMING TIMEFRAMES ANALYSIS")
+    print("="*70)
+    
+    time_opened = defaultdict(int)
+    time_closed = defaultdict(int)
+    time_durations = defaultdict(list)
+    time_still_open = defaultdict(int)
+    
+    # Track opened trades by time slot
+    for trade in opened_trades:
+        open_time = parse_time(trade.get('time'))
+        if open_time:
+            time_slot = get_half_hour_slot(open_time)
+            if time_slot:
+                time_opened[time_slot] += 1
+    
+    # Track closed trades by time slot (excluding profit target closed)
+    closed_symbols_times = set()
+    for trade in closed_trades:
+        symbol = trade.get('symbol')
+        open_time_str = trade.get('open_time')
+        if symbol and open_time_str:
+            closed_symbols_times.add((symbol, open_time_str))
+        
+        if trade.get('closed_by_profit_target') == True:
+            continue
+        open_time = parse_time(trade.get('open_time'))
+        close_time = parse_time(trade.get('close_time'))
+        
+        if open_time and close_time:
+            time_slot = get_half_hour_slot(open_time)
+            if time_slot:
+                time_closed[time_slot] += 1
+                duration = (close_time - open_time).total_seconds() / 60  # in minutes
+                time_durations[time_slot].append(duration)
+    
+    # Count still open trades by time slot
+    for trade in opened_trades:
+        symbol = trade.get('symbol')
+        time = trade.get('time')
+        if symbol and time:
+            if (symbol, time) not in closed_symbols_times:
+                open_time = parse_time(time)
+                if open_time:
+                    time_slot = get_half_hour_slot(open_time)
+                    if time_slot:
+                        time_still_open[time_slot] += 1
+    
+    # Calculate statistics
+    print("\nTimeframe Performance (Sorted by Success Rate - Worst First):")
+    print(f"{'Timeframe':<15} {'Opened':>10} {'Closed':>10} {'Still Open':>12} {'Success Rate':>15} {'Avg Duration':>18}")
+    print("-" * 90)
+    
+    all_time_slots = set(time_opened.keys()) | set(time_closed.keys())
+    time_stats = []
+    
+    for time_slot in all_time_slots:
+        opened = time_opened[time_slot]
+        closed = time_closed[time_slot]
+        still_open = time_still_open[time_slot]
+        success_rate = (closed / opened * 100) if opened > 0 else 0
+        avg_duration = (sum(time_durations[time_slot]) / len(time_durations[time_slot])) if time_durations[time_slot] else 0
+        time_stats.append((time_slot, opened, closed, still_open, success_rate, avg_duration))
+    
+    # Sort by success rate ascending (worst first)
+    time_stats.sort(key=lambda x: x[4])
+    
+    for stat in time_stats:
+        time_slot, opened, closed, still_open, success_rate, avg_duration = stat
+        duration_str = f"{avg_duration:.2f} min" if avg_duration > 0 else "N/A"
+        print(f"{time_slot:<15} {opened:>10} {closed:>10} {still_open:>12} {success_rate:>14.2f}% {duration_str:>18}")
+    
+    # Summary - Top 5 worst timeframes
+    print("\n" + "="*70)
+    print("TOP 5 WORST PERFORMING TIMEFRAMES (Consider Canceling):")
+    print("-" * 70)
+    worst_timeframes = [t for t in time_stats if t[1] >= 5][:5]  # At least 5 trades
+    for i, stat in enumerate(worst_timeframes, 1):
+        time_slot, opened, closed, still_open, success_rate, avg_duration = stat
+        print(f"{i}. {time_slot}")
+        print(f"   - Opened: {opened}, Closed: {closed}, Still Open: {still_open}")
+        print(f"   - Success Rate: {success_rate:.2f}%")
+        if avg_duration > 0:
+            print(f"   - Avg Duration: {avg_duration:.2f} min ({avg_duration/60:.2f} hrs)")
+    
+    # Best timeframes
+    best_timeframes = sorted([t for t in time_stats if t[1] >= 5], key=lambda x: x[4], reverse=True)[:5]
+    if best_timeframes:
+        print(f"\nTOP 5 BEST PERFORMING TIMEFRAMES:")
+        print("-" * 70)
+        for i, stat in enumerate(best_timeframes, 1):
+            time_slot, opened, closed, still_open, success_rate, avg_duration = stat
+            print(f"{i}. {time_slot} - Success Rate: {success_rate:.2f}%")
+    print("="*70)
+
+def analyze_combined_worst_performers(opened_trades, closed_trades):
+    """
+    Option 16: Combined analysis of worst performing days, strategies, and timeframes
+    Provides a summary of all worst performers for easy cancellation decisions
+    """
+    print("\n" + "="*70)
+    print("OPTION 16: COMBINED WORST PERFORMERS SUMMARY")
+    print("="*70)
+    print("\nThis analysis helps identify combinations to cancel for better results.")
+    
+    # Analyze days
+    day_opened = defaultdict(int)
+    day_closed = defaultdict(int)
+    
+    for trade in opened_trades:
+        open_time = parse_time(trade.get('time'))
+        if open_time:
+            day = get_day_of_week(open_time)
+            if day:
+                day_opened[day] += 1
+    
+    for trade in closed_trades:
+        if trade.get('closed_by_profit_target') == True:
+            continue
+        open_time = parse_time(trade.get('open_time'))
+        if open_time:
+            day = get_day_of_week(open_time)
+            if day:
+                day_closed[day] += 1
+    
+    day_stats = []
+    for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']:
+        if day_opened[day] > 0:
+            success_rate = (day_closed[day] / day_opened[day] * 100)
+            day_stats.append((day, day_opened[day], success_rate))
+    day_stats.sort(key=lambda x: x[2])
+    
+    # Analyze strategies
+    strategy_opened = Counter()
+    strategy_closed = Counter()
+    
+    for trade in opened_trades:
+        strategy = trade.get('kind', 'UNKNOWN')
+        strategy_opened[strategy] += 1
+    
+    for trade in closed_trades:
+        if trade.get('closed_by_profit_target') == True:
+            continue
+        strategy = trade.get('strategy', 'UNKNOWN')
+        strategy_closed[strategy] += 1
+    
+    strategy_stats = []
+    for strategy in set(strategy_opened.keys()) | set(strategy_closed.keys()):
+        if strategy_opened[strategy] >= 10:  # Minimum 10 trades
+            success_rate = (strategy_closed[strategy] / strategy_opened[strategy] * 100)
+            strategy_stats.append((strategy, strategy_opened[strategy], success_rate))
+    strategy_stats.sort(key=lambda x: x[2])
+    
+    # Analyze timeframes
+    time_opened = defaultdict(int)
+    time_closed = defaultdict(int)
+    
+    for trade in opened_trades:
+        open_time = parse_time(trade.get('time'))
+        if open_time:
+            time_slot = get_half_hour_slot(open_time)
+            if time_slot:
+                time_opened[time_slot] += 1
+    
+    for trade in closed_trades:
+        if trade.get('closed_by_profit_target') == True:
+            continue
+        open_time = parse_time(trade.get('open_time'))
+        if open_time:
+            time_slot = get_half_hour_slot(open_time)
+            if time_slot:
+                time_closed[time_slot] += 1
+    
+    time_stats = []
+    for time_slot in set(time_opened.keys()) | set(time_closed.keys()):
+        if time_opened[time_slot] >= 5:  # Minimum 5 trades
+            success_rate = (time_closed[time_slot] / time_opened[time_slot] * 100)
+            time_stats.append((time_slot, time_opened[time_slot], success_rate))
+    time_stats.sort(key=lambda x: x[2])
+    
+    # Print summary
+    print("\n" + "="*70)
+    print("📅 WORST DAYS TO TRADE (Consider Canceling):")
+    print("-" * 70)
+    for i, (day, opened, rate) in enumerate(day_stats[:3], 1):
+        print(f"  {i}. {day:<12} - {opened:>5} trades, {rate:>6.2f}% success rate")
+    
+    print("\n" + "="*70)
+    print("📊 WORST STRATEGIES (Consider Canceling):")
+    print("-" * 70)
+    for i, (strategy, opened, rate) in enumerate(strategy_stats[:3], 1):
+        print(f"  {i}. {strategy:<20} - {opened:>5} trades, {rate:>6.2f}% success rate")
+    
+    print("\n" + "="*70)
+    print("⏰ WORST TIMEFRAMES (Consider Canceling):")
+    print("-" * 70)
+    for i, (time_slot, opened, rate) in enumerate(time_stats[:5], 1):
+        print(f"  {i}. {time_slot:<15} - {opened:>5} trades, {rate:>6.2f}% success rate")
+    
+    print("\n" + "="*70)
+    print("💡 RECOMMENDATIONS:")
+    print("-" * 70)
+    
+    recommendations = []
+    if day_stats and day_stats[0][2] < 50:
+        recommendations.append(f"• Avoid trading on {day_stats[0][0]} (only {day_stats[0][2]:.1f}% success)")
+    if strategy_stats and strategy_stats[0][2] < 50:
+        recommendations.append(f"• Consider disabling {strategy_stats[0][0]} strategy (only {strategy_stats[0][2]:.1f}% success)")
+    if time_stats and time_stats[0][2] < 50:
+        recommendations.append(f"• Avoid trading during {time_stats[0][0]} (only {time_stats[0][2]:.1f}% success)")
+    
+    if recommendations:
+        for rec in recommendations:
+            print(rec)
+    else:
+        print("No significant underperformers detected (all above 50% success rate)")
+    
+    print("="*70)
+
 def main():
     """Main function with menu system"""
     print("="*70)
@@ -749,10 +1177,17 @@ def main():
         print("10. Analyze profit target closed trades by strategy")
         print("11. Analyze profit target closed trades by time period")
         print("12. Run all profit target analyses (10+11)")
+        print("-" * 70)
+        print("WORST PERFORMERS ANALYSIS (for cancellation decisions):")
+        print("13. Worst performing DAYS of week")
+        print("14. Worst performing STRATEGIES")
+        print("15. Worst performing TIMEFRAMES (half-hour slots)")
+        print("16. Combined worst performers summary (days + strategies + timeframes)")
+        print("17. Run all worst performers analyses (13+14+15+16)")
         print("0. Exit")
         print("="*70)
         
-        choice = input("\nEnter your choice (0-12): ").strip()
+        choice = input("\nEnter your choice (0-17): ").strip()
         
         if choice == '1':
             analyze_strategy_effectiveness(opened_trades, closed_trades)
@@ -784,11 +1219,24 @@ def main():
         elif choice == '12':
             analyze_profit_target_by_strategy(opened_trades, closed_trades)
             analyze_profit_target_by_time(opened_trades, closed_trades)
+        elif choice == '13':
+            analyze_worst_performing_days(opened_trades, closed_trades)
+        elif choice == '14':
+            analyze_worst_performing_strategies(opened_trades, closed_trades)
+        elif choice == '15':
+            analyze_worst_performing_timeframes(opened_trades, closed_trades)
+        elif choice == '16':
+            analyze_combined_worst_performers(opened_trades, closed_trades)
+        elif choice == '17':
+            analyze_worst_performing_days(opened_trades, closed_trades)
+            analyze_worst_performing_strategies(opened_trades, closed_trades)
+            analyze_worst_performing_timeframes(opened_trades, closed_trades)
+            analyze_combined_worst_performers(opened_trades, closed_trades)
         elif choice == '0':
             print("\nExiting... Goodbye!")
             break
         else:
-            print("\nInvalid choice. Please select 0-12.")
+            print("\nInvalid choice. Please select 0-17.")
 
 if __name__ == '__main__':
     main()
