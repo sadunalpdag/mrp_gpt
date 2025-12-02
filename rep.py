@@ -1018,6 +1018,384 @@ def analyze_worst_performing_timeframes(opened_trades, closed_trades):
             print(f"{i}. {time_slot} - Success Rate: {success_rate:.2f}%")
     print("="*70)
 
+def analyze_closed_trades_parameters(opened_trades, closed_trades):
+    """
+    Option 18: Analyze the relationship between closed trades and their parameters
+    Shows how power, hour, day, and strategy affect closing success
+    """
+    print("\n" + "="*70)
+    print("OPTION 18: CLOSED TRADES PARAMETER RELATIONSHIP ANALYSIS")
+    print("="*70)
+    
+    # Filter closed trades (excluding profit target closed)
+    valid_closed = [t for t in closed_trades if not t.get('closed_by_profit_target')]
+    
+    if not valid_closed:
+        print("No closed trades found (excluding profit target closed).")
+        return
+    
+    print(f"\nTotal Closed Trades (excluding PT closed): {len(valid_closed)}")
+    
+    # Analyze by Power Range
+    print("\n" + "-"*70)
+    print("POWER RANGE vs CLOSING SUCCESS:")
+    print("-"*70)
+    
+    power_stats = defaultdict(lambda: {'wins': 0, 'total': 0, 'duration_sum': 0})
+    
+    for trade in valid_closed:
+        power = trade.get('power')
+        if power is not None:
+            power_range = int(power)
+            exit_reason = trade.get('exit_reason', '')
+            
+            open_time = parse_time(trade.get('open_time'))
+            close_time = parse_time(trade.get('close_time'))
+            duration = 0
+            if open_time and close_time:
+                duration = (close_time - open_time).total_seconds() / 60
+            
+            power_stats[power_range]['total'] += 1
+            if exit_reason == 'TP':
+                power_stats[power_range]['wins'] += 1
+            power_stats[power_range]['duration_sum'] += duration
+    
+    print(f"{'Power Range':<15} {'Total':>10} {'Wins':>10} {'Win Rate':>12} {'Avg Duration':>18}")
+    print("-"*70)
+    
+    for power_range in sorted(power_stats.keys()):
+        stats = power_stats[power_range]
+        win_rate = (stats['wins'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        avg_duration = stats['duration_sum'] / stats['total'] if stats['total'] > 0 else 0
+        print(f"{power_range}-{power_range+1:<10} {stats['total']:>10} {stats['wins']:>10} {win_rate:>11.1f}% {avg_duration:>17.1f}m")
+    
+    # Analyze by Hour
+    print("\n" + "-"*70)
+    print("HOUR vs CLOSING SUCCESS:")
+    print("-"*70)
+    
+    hour_stats = defaultdict(lambda: {'wins': 0, 'total': 0, 'duration_sum': 0})
+    
+    for trade in valid_closed:
+        open_time = parse_time(trade.get('open_time'))
+        close_time = parse_time(trade.get('close_time'))
+        
+        if open_time:
+            hour = open_time.hour
+            exit_reason = trade.get('exit_reason', '')
+            duration = 0
+            if close_time:
+                duration = (close_time - open_time).total_seconds() / 60
+            
+            hour_stats[hour]['total'] += 1
+            if exit_reason == 'TP':
+                hour_stats[hour]['wins'] += 1
+            hour_stats[hour]['duration_sum'] += duration
+    
+    print(f"{'Hour (UTC)':<12} {'Total':>10} {'Wins':>10} {'Win Rate':>12} {'Avg Duration':>18}")
+    print("-"*70)
+    
+    for hour in sorted(hour_stats.keys()):
+        stats = hour_stats[hour]
+        win_rate = (stats['wins'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        avg_duration = stats['duration_sum'] / stats['total'] if stats['total'] > 0 else 0
+        print(f"{hour:02d}:00-{(hour+1)%24:02d}:00 {stats['total']:>10} {stats['wins']:>10} {win_rate:>11.1f}% {avg_duration:>17.1f}m")
+    
+    # Analyze by Day
+    print("\n" + "-"*70)
+    print("DAY OF WEEK vs CLOSING SUCCESS:")
+    print("-"*70)
+    
+    day_stats = defaultdict(lambda: {'wins': 0, 'total': 0, 'duration_sum': 0})
+    
+    for trade in valid_closed:
+        open_time = parse_time(trade.get('open_time'))
+        close_time = parse_time(trade.get('close_time'))
+        
+        if open_time:
+            day = get_day_of_week(open_time)
+            if day:
+                exit_reason = trade.get('exit_reason', '')
+                duration = 0
+                if close_time:
+                    duration = (close_time - open_time).total_seconds() / 60
+                
+                day_stats[day]['total'] += 1
+                if exit_reason == 'TP':
+                    day_stats[day]['wins'] += 1
+                day_stats[day]['duration_sum'] += duration
+    
+    print(f"{'Day':<12} {'Total':>10} {'Wins':>10} {'Win Rate':>12} {'Avg Duration':>18}")
+    print("-"*70)
+    
+    days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    for day in days_order:
+        if day in day_stats:
+            stats = day_stats[day]
+            win_rate = (stats['wins'] / stats['total'] * 100) if stats['total'] > 0 else 0
+            avg_duration = stats['duration_sum'] / stats['total'] if stats['total'] > 0 else 0
+            print(f"{day:<12} {stats['total']:>10} {stats['wins']:>10} {win_rate:>11.1f}% {avg_duration:>17.1f}m")
+    
+    # Analyze by Strategy
+    print("\n" + "-"*70)
+    print("STRATEGY vs CLOSING SUCCESS:")
+    print("-"*70)
+    
+    strategy_stats = defaultdict(lambda: {'wins': 0, 'total': 0, 'duration_sum': 0})
+    
+    for trade in valid_closed:
+        strategy = trade.get('strategy', 'UNKNOWN')
+        open_time = parse_time(trade.get('open_time'))
+        close_time = parse_time(trade.get('close_time'))
+        exit_reason = trade.get('exit_reason', '')
+        
+        duration = 0
+        if open_time and close_time:
+            duration = (close_time - open_time).total_seconds() / 60
+        
+        strategy_stats[strategy]['total'] += 1
+        if exit_reason == 'TP':
+            strategy_stats[strategy]['wins'] += 1
+        strategy_stats[strategy]['duration_sum'] += duration
+    
+    print(f"{'Strategy':<25} {'Total':>10} {'Wins':>10} {'Win Rate':>12} {'Avg Duration':>18}")
+    print("-"*80)
+    
+    # Sort by win rate descending
+    sorted_strategies = sorted(strategy_stats.items(), key=lambda x: (x[1]['wins']/x[1]['total'] if x[1]['total'] > 0 else 0), reverse=True)
+    
+    for strategy, stats in sorted_strategies:
+        win_rate = (stats['wins'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        avg_duration = stats['duration_sum'] / stats['total'] if stats['total'] > 0 else 0
+        print(f"{strategy:<25} {stats['total']:>10} {stats['wins']:>10} {win_rate:>11.1f}% {avg_duration:>17.1f}m")
+    
+    # Summary - Best parameters
+    print("\n" + "="*70)
+    print("OPTIMAL PARAMETERS SUMMARY:")
+    print("-"*70)
+    
+    # Best power range
+    best_power = max(power_stats.items(), key=lambda x: (x[1]['wins']/x[1]['total'] if x[1]['total'] >= 5 else 0), default=(None, None))
+    if best_power[0] is not None and best_power[1]['total'] >= 5:
+        win_rate = best_power[1]['wins']/best_power[1]['total']*100
+        print(f"📊 Best Power Range: {best_power[0]}-{best_power[0]+1} (Win Rate: {win_rate:.1f}%, Trades: {best_power[1]['total']})")
+    
+    # Best hour
+    best_hour = max(hour_stats.items(), key=lambda x: (x[1]['wins']/x[1]['total'] if x[1]['total'] >= 5 else 0), default=(None, None))
+    if best_hour[0] is not None and best_hour[1]['total'] >= 5:
+        win_rate = best_hour[1]['wins']/best_hour[1]['total']*100
+        print(f"⏰ Best Hour: {best_hour[0]:02d}:00-{(best_hour[0]+1)%24:02d}:00 UTC (Win Rate: {win_rate:.1f}%, Trades: {best_hour[1]['total']})")
+    
+    # Best day
+    best_day = max(day_stats.items(), key=lambda x: (x[1]['wins']/x[1]['total'] if x[1]['total'] >= 5 else 0), default=(None, None))
+    if best_day[0] is not None and best_day[1]['total'] >= 5:
+        win_rate = best_day[1]['wins']/best_day[1]['total']*100
+        print(f"📅 Best Day: {best_day[0]} (Win Rate: {win_rate:.1f}%, Trades: {best_day[1]['total']})")
+    
+    # Best strategy
+    best_strategy = max(strategy_stats.items(), key=lambda x: (x[1]['wins']/x[1]['total'] if x[1]['total'] >= 5 else 0), default=(None, None))
+    if best_strategy[0] is not None and best_strategy[1]['total'] >= 5:
+        win_rate = best_strategy[1]['wins']/best_strategy[1]['total']*100
+        print(f"📈 Best Strategy: {best_strategy[0]} (Win Rate: {win_rate:.1f}%, Trades: {best_strategy[1]['total']})")
+    
+    print("="*70)
+
+
+def filter_open_trades_by_options(opened_trades, closed_trades):
+    """
+    Option 19: Filter open trades by hour, day, and strategy options
+    Allows interactive filtering of currently open trades
+    """
+    print("\n" + "="*70)
+    print("OPTION 19: FILTER OPEN TRADES BY PARAMETERS")
+    print("="*70)
+    
+    # Get current time with UTC timezone
+    from datetime import timezone
+    current_time = datetime.now(timezone.utc)
+    
+    # Find trades that are still open
+    closed_symbols_times = set()
+    for trade in closed_trades:
+        symbol = trade.get('symbol')
+        open_time = trade.get('open_time')
+        if symbol and open_time:
+            closed_symbols_times.add((symbol, open_time))
+    
+    open_trades_info = []
+    for trade in opened_trades:
+        symbol = trade.get('symbol')
+        time = trade.get('time')
+        if symbol and time:
+            if (symbol, time) not in closed_symbols_times:
+                open_time = parse_time(time)
+                if open_time:
+                    duration = (current_time - open_time).total_seconds() / 3600
+                    strategy = trade.get('kind', 'UNKNOWN')
+                    power = trade.get('power', 0)
+                    direction = trade.get('dir', 'UNKNOWN')
+                    day = get_day_of_week(open_time)
+                    hour = open_time.hour
+                    
+                    open_trades_info.append({
+                        'symbol': symbol,
+                        'strategy': strategy,
+                        'direction': direction,
+                        'power': power,
+                        'open_time': time,
+                        'hours_open': duration,
+                        'entry': trade.get('entry'),
+                        'day': day,
+                        'hour': hour
+                    })
+    
+    if not open_trades_info:
+        print("No currently open trades found.")
+        return
+    
+    print(f"\nTotal Currently Open Trades: {len(open_trades_info)}")
+    
+    # Get available options
+    available_strategies = sorted(set(t['strategy'] for t in open_trades_info))
+    available_days = sorted(set(t['day'] for t in open_trades_info if t['day']), 
+                           key=lambda x: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].index(x))
+    available_hours = sorted(set(t['hour'] for t in open_trades_info))
+    
+    print("\n" + "-"*70)
+    print("AVAILABLE FILTER OPTIONS:")
+    print("-"*70)
+    print(f"\nStrategies: {', '.join(available_strategies)}")
+    print(f"Days: {', '.join(available_days)}")
+    print(f"Hours (UTC): {', '.join(str(h) for h in available_hours)}")
+    
+    # Sub-menu for filtering
+    while True:
+        print("\n" + "-"*70)
+        print("SELECT FILTER TYPE:")
+        print("-"*70)
+        print("1. Filter by HOUR")
+        print("2. Filter by DAY")
+        print("3. Filter by STRATEGY")
+        print("4. Show ALL open trades (no filter)")
+        print("5. Combined filter (Hour + Day + Strategy)")
+        print("0. Back to main menu")
+        print("-"*70)
+        
+        filter_choice = input("\nEnter filter choice (0-5): ").strip()
+        
+        if filter_choice == '0':
+            break
+        
+        filtered_trades = open_trades_info.copy()
+        
+        if filter_choice == '1':
+            # Filter by Hour
+            print(f"\nAvailable Hours: {', '.join(str(h) for h in available_hours)}")
+            hour_input = input("Enter hour to filter (e.g., 8 or 8,9,10 for multiple): ").strip()
+            if hour_input:
+                try:
+                    selected_hours = [int(h.strip()) for h in hour_input.split(',')]
+                    filtered_trades = [t for t in filtered_trades if t['hour'] in selected_hours]
+                except ValueError:
+                    print("Invalid hour input.")
+                    continue
+        
+        elif filter_choice == '2':
+            # Filter by Day
+            print(f"\nAvailable Days: {', '.join(available_days)}")
+            day_input = input("Enter day to filter (e.g., Monday or Monday,Tuesday): ").strip()
+            if day_input:
+                selected_days = [d.strip().capitalize() for d in day_input.split(',')]
+                filtered_trades = [t for t in filtered_trades if t['day'] in selected_days]
+        
+        elif filter_choice == '3':
+            # Filter by Strategy
+            print(f"\nAvailable Strategies: {', '.join(available_strategies)}")
+            strategy_input = input("Enter strategy to filter (e.g., CEST or CEST,MACD): ").strip()
+            if strategy_input:
+                selected_strategies = [s.strip().upper() for s in strategy_input.split(',')]
+                filtered_trades = [t for t in filtered_trades if t['strategy'].upper() in selected_strategies]
+        
+        elif filter_choice == '4':
+            # Show all - no filter needed
+            pass
+        
+        elif filter_choice == '5':
+            # Combined filter
+            print("\n--- Combined Filter ---")
+            print(f"Available Hours: {', '.join(str(h) for h in available_hours)}")
+            hour_input = input("Enter hour(s) to filter (leave empty for all): ").strip()
+            if hour_input:
+                try:
+                    selected_hours = [int(h.strip()) for h in hour_input.split(',')]
+                    filtered_trades = [t for t in filtered_trades if t['hour'] in selected_hours]
+                except ValueError:
+                    print("Invalid hour input. Skipping hour filter.")
+            
+            print(f"\nAvailable Days: {', '.join(available_days)}")
+            day_input = input("Enter day(s) to filter (leave empty for all): ").strip()
+            if day_input:
+                selected_days = [d.strip().capitalize() for d in day_input.split(',')]
+                filtered_trades = [t for t in filtered_trades if t['day'] in selected_days]
+            
+            print(f"\nAvailable Strategies: {', '.join(available_strategies)}")
+            strategy_input = input("Enter strategy(ies) to filter (leave empty for all): ").strip()
+            if strategy_input:
+                selected_strategies = [s.strip().upper() for s in strategy_input.split(',')]
+                filtered_trades = [t for t in filtered_trades if t['strategy'].upper() in selected_strategies]
+        
+        else:
+            print("Invalid choice.")
+            continue
+        
+        # Display filtered results
+        print("\n" + "="*70)
+        print(f"FILTERED RESULTS: {len(filtered_trades)} trades")
+        print("="*70)
+        
+        if not filtered_trades:
+            print("No trades match the filter criteria.")
+            continue
+        
+        # Sort by hours open (descending)
+        filtered_trades.sort(key=lambda x: x['hours_open'], reverse=True)
+        
+        print(f"\n{'Symbol':<15} {'Strategy':<15} {'Dir':<6} {'Power':<10} {'Hours':<10} {'Day':<12} {'Hour':<8}")
+        print("-"*90)
+        
+        for trade in filtered_trades:
+            print(f"{trade['symbol']:<15} {trade['strategy']:<15} {trade['direction']:<6} "
+                  f"{trade['power']:<10.1f} {trade['hours_open']:<10.1f} "
+                  f"{trade['day']:<12} {trade['hour']:02d}:00")
+        
+        # Summary statistics
+        print("\n" + "-"*70)
+        print("FILTERED SUMMARY:")
+        print("-"*70)
+        
+        total_hours = sum(t['hours_open'] for t in filtered_trades)
+        avg_hours = total_hours / len(filtered_trades)
+        avg_power = sum(t['power'] for t in filtered_trades) / len(filtered_trades)
+        
+        print(f"Total Trades: {len(filtered_trades)}")
+        print(f"Average Hours Open: {avg_hours:.2f}")
+        print(f"Average Power: {avg_power:.2f}")
+        
+        # By strategy
+        strategy_counts = Counter(t['strategy'] for t in filtered_trades)
+        print("\nBy Strategy:")
+        for strategy, count in strategy_counts.most_common():
+            print(f"  - {strategy}: {count} trades")
+        
+        # By day
+        day_counts = Counter(t['day'] for t in filtered_trades)
+        print("\nBy Day:")
+        for day, count in day_counts.most_common():
+            print(f"  - {day}: {count} trades")
+        
+        print("="*70)
+
+
 def analyze_combined_worst_performers(opened_trades, closed_trades):
     """
     Option 16: Combined analysis of worst performing days, strategies, and timeframes
@@ -1184,10 +1562,14 @@ def main():
         print("15. Worst performing TIMEFRAMES (half-hour slots)")
         print("16. Combined worst performers summary (days + strategies + timeframes)")
         print("17. Run all worst performers analyses (13+14+15+16)")
+        print("-" * 70)
+        print("PARAMETER RELATIONSHIP ANALYSIS:")
+        print("18. Closed trades parameter relationship (power, hour, day, strategy)")
+        print("19. Filter open trades by hour, day, strategy")
         print("0. Exit")
         print("="*70)
         
-        choice = input("\nEnter your choice (0-17): ").strip()
+        choice = input("\nEnter your choice (0-19): ").strip()
         
         if choice == '1':
             analyze_strategy_effectiveness(opened_trades, closed_trades)
@@ -1232,11 +1614,15 @@ def main():
             analyze_worst_performing_strategies(opened_trades, closed_trades)
             analyze_worst_performing_timeframes(opened_trades, closed_trades)
             analyze_combined_worst_performers(opened_trades, closed_trades)
+        elif choice == '18':
+            analyze_closed_trades_parameters(opened_trades, closed_trades)
+        elif choice == '19':
+            filter_open_trades_by_options(opened_trades, closed_trades)
         elif choice == '0':
             print("\nExiting... Goodbye!")
             break
         else:
-            print("\nInvalid choice. Please select 0-17.")
+            print("\nInvalid choice. Please select 0-19.")
 
 if __name__ == '__main__':
     main()
